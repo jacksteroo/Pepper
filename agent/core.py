@@ -11,6 +11,8 @@ from agent.config import Settings
 from agent.llm import ModelClient
 from agent.life_context import build_system_prompt, get_owner_name, update_life_context
 from agent.tool_router import ToolRouter
+from agent.query_router import QueryRouter, IntentType, ActionMode
+from agent.capability_registry import CapabilityRegistry
 from agent.mcp_client import MCPClient
 from agent.memory import MemoryManager
 from agent.memory_tools import MEMORY_TOOLS
@@ -145,6 +147,10 @@ class PepperCore:
         # An entry is created when a write tool is first proposed; the user must
         # explicitly approve before the tool executes on the following turn.
         self._pending_mcp_writes: dict[str, dict] = {}
+
+        # Phase 6: intent router + capability registry
+        self._router = QueryRouter()
+        self._capability_registry = CapabilityRegistry()
 
     @staticmethod
     def _normalize_user_text(text: str) -> str:
@@ -285,6 +291,48 @@ class PepperCore:
             return f"You are {owner_name}."
         return "I'm Pepper, your AI life assistant."
 
+    def _answer_capability_check(self, user_message: str, routing) -> str | None:
+        """Return a registry-grounded answer for capability-check queries.
+
+        Returns None when the registry doesn't have enough information to give
+        a confident answer — the query then falls through to the normal path.
+        """
+        sources = routing.target_sources
+
+        # Generic "what can you do?" query
+        if sources == ["all"]:
+            report = self._capability_registry.answer_generic_capability_query()
+            if report:
+                return report
+            return None
+
+        # Source-specific capability check
+        if not sources or sources == ["unknown"]:
+            return None
+
+        lines: list[str] = []
+        for source in sources:
+            answer = self._capability_registry.answer_capability_query(source)
+            # Only use registry answer if the registry actually has an entry for this source
+            if "don't have" not in answer:
+                lines.append(answer)
+
+        if not lines:
+            return None
+
+        response = " ".join(lines)
+        # Append a "try anyway" nudge when any source is available, so the model
+        # doesn't stop at the capability question and skips the actual fetch.
+        from agent.capability_registry import CapabilityStatus
+        has_available = any(
+            self._capability_registry.get_status(s) == CapabilityStatus.AVAILABLE
+            for s in sources
+            if self._capability_registry.get(s)
+        )
+        if has_available:
+            response += " Want me to fetch the data now?"
+        return response
+
     @staticmethod
     def _probe_subsystem_health() -> dict[str, str]:
         """Check subsystem availability by probing in-process imports.
@@ -313,7 +361,20 @@ class PepperCore:
 
     async def initialize(self) -> None:
         """Call once at startup."""
-        self._system_prompt = build_system_prompt(self.config.LIFE_CONTEXT_PATH, self.config)
+        # Phase 6: populate capability registry first so the system prompt
+        # can reflect live source statuses from the start.
+        try:
+            await self._capability_registry.populate(self.config)
+            logger.info(
+                "capability_registry_ready",
+                available=self._capability_registry.get_available_sources(),
+            )
+        except Exception as e:
+            logger.warning("capability_registry_init_failed", error=str(e))
+
+        self._system_prompt = build_system_prompt(
+            self.config.LIFE_CONTEXT_PATH, self.config, self._capability_registry
+        )
 
         # Phase 5: initialize MCP client and wire it into the tool router
         try:
@@ -493,6 +554,38 @@ class PepperCore:
                 duration_ms=round((time.perf_counter() - started_at) * 1000),
             )
             return identity_response
+
+        # Phase 6.1: route the query before any tool dispatch or prompt assembly.
+        # The routing decision is logged for eval tracking and is used below to:
+        #   - Short-circuit capability-check queries with a registry answer
+        #   - Tag entity targets for person-centric lookups (future use)
+        routing = self._router.route(user_message, self._capability_registry)
+        chat_logger.info(
+            "routing_decision",
+            intent=routing.intent_type.value,
+            sources=routing.target_sources,
+            action_mode=routing.action_mode.value,
+            time_scope=routing.time_scope,
+            entity_targets=routing.entity_targets,
+        )
+
+        # Phase 6.3: answer capability-check queries directly from the registry.
+        # This prevents the model from guessing ("I think I can read email…") and
+        # gives precise per-source status based on actual runtime state.
+        if routing.intent_type == IntentType.CAPABILITY_CHECK and not isolated:
+            cap_response = self._answer_capability_check(user_message, routing)
+            if cap_response:
+                if not isolated:
+                    self.memory.add_to_working_memory("assistant", cap_response)
+                chat_logger.info("capability_check_short_circuit",
+                                 response_preview=self._preview_text(cap_response, 180))
+                chat_logger.info("chat_out", text=cap_response[:1000])
+                await self._save_conversation(session_id, user_message, cap_response)
+                chat_logger.info(
+                    "chat_complete", path="capability_check",
+                    duration_ms=round((time.perf_counter() - started_at) * 1000),
+                )
+                return cap_response
 
         # Detect and save commitments from user messages
         if self.commitment_extractor.has_commitment_language(user_message):
@@ -1233,7 +1326,9 @@ class PepperCore:
                             session,
                             self.config.LIFE_CONTEXT_PATH,
                         )
-                self._system_prompt = build_system_prompt(self.config.LIFE_CONTEXT_PATH, self.config)
+                self._system_prompt = build_system_prompt(
+                    self.config.LIFE_CONTEXT_PATH, self.config, self._capability_registry
+                )
                 result = {"ok": True, "message": f"Updated section: {args['section']}"}
 
             elif name == "get_driving_time":

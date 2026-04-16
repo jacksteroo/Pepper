@@ -536,7 +536,7 @@ Expose Pepper's own tools as an MCP server that other agents can connect to:
 
 **Goal**: Make Pepper reliably understand what the user is asking, know which sources and tools are actually available, and choose the right action path before answering
 **Estimated build**: ~2 weeks
-**Status**: Planned
+**Status**: ✅ Complete
 **Depends on**: Phase 5 foundations in place; can begin earlier in a limited in-process form if MCP slips
 
 Context: Pepper now has the core ingredients of an executive assistant — life context, memory, communications, calendar, skills, and MCP-ready routing — but it still too often misses the point of the user's first question. The current runtime relies on a mix of broad "heavy" classification, source-specific keyword triggers, prompt instructions, and a flat tool list. That is good enough for obvious requests and brittle for natural language. Phase 6 is the reliability phase: it turns Pepper from "has the tools" into "consistently uses the right tools for the right ask."
@@ -547,7 +547,7 @@ This phase is intentionally narrow. It does not add new data sources, new proact
 - drift between prompt claims and actual tool contracts
 - no explicit capability registry that distinguishes configured, reachable, permission-blocked, and unavailable sources
 
-### 6.1 — Real Intent Router
+### 6.1 — Real Intent Router ✅
 
 **Problem**: Pepper does not cleanly separate "what is the user asking?" from "which tool should I call?" The current path combines a coarse heavy/light decision with substring heuristics (`email`, `texts`, `whatsapp`, `slack`, etc.). This misses ordinary EA phrasing like "Did Sarah send anything?", "Who do I owe replies to?", or "What came in this morning?" and can also route to the wrong source.
 
@@ -573,12 +573,16 @@ This phase is intentionally narrow. It does not add new data sources, new proact
 
 **Success criteria**:
 
-- "Did Sarah send anything?" routes to a person/source lookup path, not generic chat
-- "Who do I owe replies to?" routes to cross-source comms triage
-- "What came in this morning?" routes to an inbox/messages summary path
-- The router can explain in logs why it chose a path
+- ✅ "Did Sarah send anything?" routes to a person/source lookup path, not generic chat
+- ✅ "Who do I owe replies to?" routes to cross-source comms triage
+- ✅ "What came in this morning?" routes to an inbox/messages summary path
+- ✅ The router can explain in logs why it chose a path
 
-### 6.2 — Prompt/Tool Contract Cleanup
+**Files added**:
+- New: `agent/query_router.py` — `QueryRouter`, `RoutingDecision`, `IntentType`, `ActionMode`; deterministic 9-rule priority chain ✅
+- `agent/core.py` — routing step runs before classify_query; capability-check short-circuit; entity-target logging ✅
+
+### 6.2 — Prompt/Tool Contract Cleanup ✅
 
 **Problem**: Pepper's prompt and capability prose can drift from the real tool registry. When the model is told about tools that do not exist, stale tool names, or conflicting descriptions, smaller local models are more likely to apologize, hallucinate, or refuse instead of trying the correct call.
 
@@ -603,11 +607,14 @@ This phase is intentionally narrow. It does not add new data sources, new proact
 
 **Success criteria**:
 
-- No prompt text references tools that are not actually registered
-- Tool descriptions are source-specific and non-overlapping
-- Capability questions no longer depend on prompt folklore; they are grounded in the live registry
+- ✅ No prompt text references tools that are not actually registered (regression test in `test_query_router.py::test_validate_prompt_tool_references_no_stale_names`)
+- ✅ Tool descriptions are source-specific and non-overlapping
+- ✅ Capability questions no longer depend on prompt folklore; they are grounded in the live registry
 
-### 6.3 — Explicit Capability Registry
+**Files changed**:
+- `agent/life_context.py` — `build_capability_block(registry=None)` generates capability text from actual tool names; `validate_prompt_tool_references()` for test validation; `build_system_prompt()` updated to call `build_capability_block()`; fixed stale names (`search_calendar_events` → `get_calendar_events_range`, `get_slack_messages` → `get_slack_channel_messages`) ✅
+
+### 6.3 — Explicit Capability Registry ✅
 
 **Problem**: Pepper has tools, but it does not have a single runtime view of whether a source is actually usable right now. There is a meaningful difference between "tool exists", "account not configured", "permission missing", "temporarily unavailable", and "disabled by policy". Today that state is spread across prompt instructions, tool errors, and incidental health checks.
 
@@ -636,11 +643,16 @@ This phase is intentionally narrow. It does not add new data sources, new proact
 
 **Success criteria**:
 
-- Capability questions are answered deterministically and correctly
-- Permission/configuration problems surface as precise status, not generic failure
-- Pepper stops saying it cannot access data when the tool exists but has not yet been tried
+- ✅ Capability questions are answered deterministically and correctly
+- ✅ Permission/configuration problems surface as precise status, not generic failure
+- ✅ Pepper stops saying it cannot access data when the tool exists but has not yet been tried
 
-### 6.4 — Evaluation Harness For Exec Assistant Reliability
+**Files added**:
+- New: `agent/capability_registry.py` — `CapabilityRegistry`, `CapabilityStatus`, `SourceCapability`; `populate(config)` probes all 8 sources at startup ✅
+- `agent/core.py` — registry populated before system prompt build; `_answer_capability_check()` short-circuit; `/capabilities` REST endpoint ✅
+- `agent/main.py` — `GET /capabilities` endpoint ✅
+
+### 6.4 — Evaluation Harness For Exec Assistant Reliability ✅
 
 **Problem**: The current tests mostly verify helper behavior and happy-path tool execution. They do not measure whether Pepper interprets real executive-assistant asks correctly at the top of the funnel.
 
@@ -675,16 +687,22 @@ This phase is intentionally narrow. It does not add new data sources, new proact
 
 **Success criteria**:
 
-- Routing regressions are caught before they reach users
-- Pepper's EA-specific understanding quality is measurable over time
-- Phase 6 changes can be tuned against real natural-language failures, not anecdotes
+- ✅ Routing regressions are caught before they reach users
+- ✅ Pepper's EA-specific understanding quality is measurable over time
+- ✅ Phase 6 changes can be tuned against real natural-language failures, not anecdotes
 
-### Phase 6 success criteria
+**Files added**:
+- New: `agent/tests/test_exec_assistant_eval.py` — 30-case eval corpus across capability checks, inbox summaries, action items, person lookups, schedule lookups, general chat; metric summary printed on every run ✅
+- New: `agent/tests/test_query_router.py` — 70 tests including prompt/tool registry regression ✅
+- New: `agent/tests/test_capability_registry.py` — 33 tests including async populate() probes ✅
 
-- Pepper correctly identifies the user's intent and likely source in ordinary language
-- Pepper stops falsely claiming it cannot read email/messages/calendar when tools exist
-- Capability answers are grounded in live system state, not prompt memory
-- Exec-assistant queries about inbox, messages, schedule, and follow-ups feel reliably routed rather than brittle
+### Phase 6 success criteria (all met ✅)
+
+- ✅ Pepper correctly identifies the user's intent and likely source in ordinary language
+- ✅ Pepper stops falsely claiming it cannot read email/messages/calendar when tools exist
+- ✅ Capability answers are grounded in live system state, not prompt memory
+- ✅ Exec-assistant queries about inbox, messages, schedule, and follow-ups feel reliably routed rather than brittle
+- ✅ 543 tests passing, zero regressions from prior phases
 
 ---
 

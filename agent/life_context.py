@@ -5,6 +5,10 @@ import structlog
 from pathlib import Path
 from datetime import datetime
 from agent.config import Settings
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent.capability_registry import CapabilityRegistry
 
 logger = structlog.get_logger()
 
@@ -141,7 +145,88 @@ async def update_life_context(
     await db_session.commit()
 
 
-def build_system_prompt(life_context_path: str = None, config=None) -> str:
+def build_capability_block(registry: "CapabilityRegistry | None" = None) -> str:
+    """Generate the capability section of the system prompt from actual tool names.
+
+    When a CapabilityRegistry is provided, statuses are reflected so the model
+    knows precisely which sources are live vs. not configured.  Without a registry,
+    falls back to a static accurate description (used during cold-start prompt build
+    before the registry has been populated).
+
+    Tool names here MUST match the actual registered tool names in core.py.
+    A test in test_life_context.py validates this invariant.
+    """
+    def _status_note(registry: "CapabilityRegistry | None", source_key: str) -> str:
+        if registry is None:
+            return ""
+        from agent.capability_registry import CapabilityStatus
+        status = registry.get_status(source_key)
+        if status == CapabilityStatus.AVAILABLE:
+            return ""
+        if status == CapabilityStatus.NOT_CONFIGURED:
+            return " (not configured)"
+        if status == CapabilityStatus.PERMISSION_REQUIRED:
+            cap = registry.get(source_key)
+            detail = cap.detail if cap else "permission required"
+            return f" (permission required: {detail})"
+        if status == CapabilityStatus.TEMPORARILY_UNAVAILABLE:
+            return " (temporarily unavailable)"
+        if status == CapabilityStatus.DISABLED:
+            return " (disabled)"
+        return ""
+
+    cal_note = _status_note(registry, "calendar_google")
+    gmail_note = _status_note(registry, "email_gmail")
+    yahoo_note = _status_note(registry, "email_yahoo")
+    imsg_note = _status_note(registry, "imessage")
+    wa_note = _status_note(registry, "whatsapp")
+    slack_note = _status_note(registry, "slack")
+    mem_note = _status_note(registry, "memory")
+    web_note = _status_note(registry, "web_search")
+
+    lines = [
+        "Your available capabilities (USE THESE — never say you \"cannot\" access something listed here):",
+        f"- Calendar{cal_note}: read upcoming events, meetings, appointments via "
+        "get_upcoming_events / get_calendar_events_range / list_calendars",
+        f"- Email (Gmail{gmail_note}, Yahoo{yahoo_note}): read inboxes via "
+        "get_recent_emails / search_emails / get_email_unread_counts / "
+        "get_email_action_items / get_email_summary",
+        f"- iMessage{imsg_note}: read text message conversations via "
+        "get_recent_imessages / get_imessage_conversation / search_imessages"
+        " — REQUIRES Full Disk Access granted to Terminal or Docker Desktop",
+        f"- WhatsApp{wa_note}: read WhatsApp chats via "
+        "get_recent_whatsapp_chats / get_whatsapp_chat / get_whatsapp_messages / "
+        "search_whatsapp / get_whatsapp_groups — available when WhatsApp Desktop is not running",
+        f"- Slack{slack_note}: read channels and DMs via "
+        "list_slack_channels / get_slack_channel_messages / search_slack / get_slack_deadlines",
+        f"- Memory{mem_note}: save and recall personal facts via "
+        "save_memory / search_memory / update_life_context",
+        "- Contacts: look up people across all channels via "
+        "get_contact_profile / search_contacts / find_quiet_contacts",
+        "- Comms Health: relationship signals via "
+        "get_comms_health_summary / get_overdue_responses / get_relationship_balance_report",
+        f"- Images{web_note}: display photos directly in Telegram via search_images — "
+        "when asked for a photo or image of any person/place/thing, call search_images "
+        "and embed the first result as [IMAGE:url] in your response, then add a sentence of context",
+    ]
+    return "\n".join(lines)
+
+
+def validate_prompt_tool_references(prompt: str, registered_tool_names: set[str]) -> list[str]:
+    """Return tool names mentioned in the prompt that are NOT in registered_tool_names.
+
+    Used in tests to catch prompt/registry drift before it reaches users.
+    """
+    found = re.findall(
+        r"\b(get_\w+|search_\w+|save_\w+|list_\w+|update_\w+|find_\w+)\b",
+        prompt,
+    )
+    unknown = [name for name in found if name not in registered_tool_names]
+    return list(dict.fromkeys(unknown))
+
+
+def build_system_prompt(life_context_path: str = None, config=None,
+                        capability_registry: "CapabilityRegistry | None" = None) -> str:
     """Build the full Pepper system prompt combining role + life context."""
     context = load_life_context(life_context_path or "docs/LIFE_CONTEXT.md")
     owner_name = get_owner_name(life_context_path or "docs/LIFE_CONTEXT.md", config)
@@ -164,6 +249,8 @@ Your automated schedule (runs inside your process — always on while the contai
     else:
         schedule_block = ""
 
+    capability_block = build_capability_block(capability_registry)
+
     return f"""You are Pepper, a sovereign AI life assistant. The human messaging you is {owner_name} — your owner. You serve {owner_name.split()[0]}. {owner_name.split()[0]} is the user; you are the assistant. You have full awareness of {owner_name.split()[0]}'s life context, relationships, goals, and current situation.
 
 Your operating principles:
@@ -180,14 +267,7 @@ Your operating principles:
 - NEVER fabricate data, events, meetings, statistics, or facts you have not retrieved from a tool call. If you don't have tool-backed data, say "I don't have that information" — do not guess or invent details
 {schedule_block}
 
-Your available capabilities (USE THESE — never say you "cannot" access something listed here):
-- Calendar: read upcoming events, meetings, appointments via get_upcoming_events / search_calendar_events
-- Email: read Gmail and Yahoo inboxes via search_emails / get_recent_emails
-- iMessage: read text message conversations via get_recent_imessages / get_imessage_conversation / search_imessages — REQUIRES Full Disk Access granted to Terminal or Docker Desktop
-- WhatsApp: read WhatsApp chats via get_recent_whatsapp_chats / get_whatsapp_chat / search_whatsapp — available when WhatsApp Desktop is not running
-- Slack: read channels and DMs via list_slack_channels / get_slack_messages / search_slack
-- Memory: save and recall personal facts via save_memory / search_memory / update_life_context
-- Images: display photos directly in Telegram via search_images — when asked for a photo or image of any person/place/thing, call search_images and embed the first result as [IMAGE:url] in your response, then add a sentence of context
+{capability_block}
 
 IMPORTANT: When asked if you can read iMessages, WhatsApp, email, or calendar — the answer is YES, you have tools for all of these. Attempt the tool call. If the data source is unavailable (e.g. permission denied), report the specific error — do NOT say you lack the capability.
 

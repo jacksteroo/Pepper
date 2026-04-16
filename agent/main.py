@@ -315,3 +315,16 @@ async def get_comms_health(quiet_days: int = 14):
         "overdue_responses": overdue if not isinstance(overdue, Exception) else {"error": "Failed to load overdue responses"},
         "relationship_balance": balance if not isinstance(balance, Exception) else {"error": "Failed to load relationship balance"},
     }
+
+
+@app.get("/capabilities", dependencies=[Depends(require_api_key)])
+async def get_capabilities():
+    """Phase 6: Live capability status for all data sources."""
+    p = _get_pepper()
+    if not p:
+        return {"capabilities": {}, "available": []}
+    report = p._capability_registry.get_full_report()
+    return {
+        "capabilities": report,
+        "available": p._capability_registry.get_available_sources(),
+    }
