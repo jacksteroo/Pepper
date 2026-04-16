@@ -11,6 +11,7 @@ import asyncio
 import os
 
 import structlog
+from agent.query_intents import SLACK_QUERY_TERMS, is_source_query
 
 logger = structlog.get_logger()
 
@@ -264,17 +265,9 @@ async def execute_slack_tool(name: str, args: dict) -> dict:
     return {"error": f"Unknown Slack tool: {name}"}
 
 
-_SLACK_TRIGGERS = (
-    "slack", "channel", "workspace",
-    "deadline", "due friday", "due monday", "by eod", "end of day",
-    "work chat", "team chat",
-)
-
-
 async def maybe_get_slack_context(user_message: str) -> str:
     """Proactively note Slack availability when deadline/work keywords appear."""
-    lower = user_message.lower()
-    if not any(t.lower() in lower for t in _SLACK_TRIGGERS):
+    if not is_source_query(user_message, SLACK_QUERY_TERMS):
         return ""
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     if not token:

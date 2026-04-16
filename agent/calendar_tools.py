@@ -8,10 +8,11 @@ Follows the same pattern as web_search.py / routing.py:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
+from agent.query_intents import CALENDAR_QUERY_TERMS, infer_calendar_days, is_source_query
 
 logger = structlog.get_logger()
 
@@ -333,24 +334,13 @@ async def execute_list_calendars() -> dict:
         return {"error": f"Could not list calendars: {e}"}
 
 
-_CALENDAR_TRIGGERS = (
-    "calendar", "schedule", "meeting", "event", "appointment",
-    "today", "tomorrow", "this week", "next week", "coming up",
-    "what do i have", "what's on", "what is on", "availability",
-    "free", "busy", "when am i", "do i have anything",
-)
-
-
 async def maybe_get_calendar_context(user_message: str) -> str:
     """Proactively inject upcoming events when the query is schedule-related."""
-    lower = user_message.lower()
-    if not any(t in lower for t in _CALENDAR_TRIGGERS):
+    if not is_source_query(user_message, CALENDAR_QUERY_TERMS, extra_terms=("today", "tomorrow", "this week", "next week", "coming up")):
         return ""
 
     # Determine look-ahead window from message
-    days = 1 if any(w in lower for w in ("today", "tonight")) else \
-           2 if "tomorrow" in lower else \
-           14 if "next week" in lower else 7
+    days = infer_calendar_days(user_message, default=7)
 
     try:
         result = await execute_get_upcoming_events({"days": days})

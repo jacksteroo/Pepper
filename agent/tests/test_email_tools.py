@@ -180,3 +180,33 @@ async def test_maybe_get_email_context_account_scope_not_phrase_list_driven(monk
 
     assert "Recent emails from Yahoo:" in context
     assert "Overnight update" in context
+
+
+@pytest.mark.asyncio
+async def test_maybe_get_email_context_includes_recent_summary_for_overnight_queries(monkeypatch):
+    async def fake_unread_counts(args):
+        return {"counts": {"personal": 5}, "total_unread": 5}
+
+    async def fake_summary(args):
+        assert args["hours"] == 12
+        return {
+            "important": [
+                {
+                    "formatted": "[Personal] Deadline moved up [UNREAD] — from Boss. Why: unread, marked urgent."
+                }
+            ],
+            "emails": [],
+            "count": 1,
+            "hours": 12,
+        }
+
+    monkeypatch.setattr(email_tools, "execute_get_email_unread_counts", fake_unread_counts)
+    monkeypatch.setattr(email_tools, "execute_get_email_summary", fake_summary)
+
+    context = await email_tools.maybe_get_email_context(
+        "summarize my emails received overnight. Anything important?"
+    )
+
+    assert "Email unread counts:" in context
+    assert "Recent important emails:" in context
+    assert "Deadline moved up" in context

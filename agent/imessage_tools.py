@@ -12,6 +12,11 @@ import asyncio
 import re
 
 import structlog
+from agent.query_intents import (
+    IMESSAGE_QUERY_TERMS,
+    is_attention_request,
+    is_source_query,
+)
 
 logger = structlog.get_logger()
 
@@ -197,32 +202,8 @@ async def execute_imessage_tool(name: str, args: dict) -> dict:
     return {"error": f"Unknown iMessage tool: {name}"}
 
 
-_IMESSAGE_TRIGGERS = (
-    "imessage", "iMessage", "text", "texted", "texting",
-    "sms", "message", "messages", "group chat",
-    "did i get a text", "any texts", "who texted",
-)
-
 _IMESSAGE_ATTENTION_TRIGGERS = (
-    "recent",
-    "latest",
-    "new",
-    "unread",
-    "summary",
-    "summarize",
-    "summarise",
-    "recap",
-    "overview",
-    "catch me up",
-    "need to know",
-    "need to be aware",
-    "aware of",
-    "what should i know",
-    "anything i should know",
-    "what do i need to know",
     "who needs a reply",
-    "need a reply",
-    "needs a reply",
     "who texted",
     "any texts",
 )
@@ -230,12 +211,11 @@ _IMESSAGE_ATTENTION_TRIGGERS = (
 
 def is_imessage_attention_query(user_message: str) -> bool:
     """Detect iMessage-summary questions that should bypass the LLM."""
-    lower = user_message.lower()
-    if not any(t in lower for t in ("imessage", "text", "texts", "sms")):
-        return False
-    if "search" in lower or "find" in lower:
-        return False
-    return any(t in lower for t in _IMESSAGE_ATTENTION_TRIGGERS)
+    return is_attention_request(
+        user_message,
+        IMESSAGE_QUERY_TERMS,
+        extra_terms=_IMESSAGE_ATTENTION_TRIGGERS,
+    )
 
 
 def _clean_message_text(text: str, max_chars: int = 140) -> str:
@@ -355,8 +335,7 @@ async def execute_get_recent_imessage_attention(args: dict) -> dict:
 
 async def maybe_get_imessage_context(user_message: str) -> str:
     """Proactively inject recent iMessage snippets when the query is text-related."""
-    lower = user_message.lower()
-    if not any(t.lower() in lower for t in _IMESSAGE_TRIGGERS):
+    if not is_source_query(user_message, IMESSAGE_QUERY_TERMS):
         return ""
 
     try:

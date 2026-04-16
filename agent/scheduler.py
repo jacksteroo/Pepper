@@ -1,9 +1,16 @@
-import asyncio
+"""Pepper proactive scheduler.
+
+Manages timed jobs: morning brief, commitment check, weekly review, and memory
+compression. All content-generation jobs now route through pepper.chat() with
+heavy=True so the skill system guides the response — no hand-rolled formatters.
+"""
+
 import structlog
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from agent.briefs import CommitmentExtractor, BriefFormatter
+from agent.briefs import CommitmentExtractor
 from agent.models import AuditLog
 
 logger = structlog.get_logger()
@@ -14,7 +21,6 @@ class PepperScheduler:
         self.pepper = pepper_core
         self.config = config
         self.bot = telegram_bot
-        self.formatter = BriefFormatter()
         self.extractor = CommitmentExtractor(llm_client=getattr(pepper_core, 'llm', None))
         self._scheduler = AsyncIOScheduler()
         self._last_brief: datetime = None
@@ -22,38 +28,34 @@ class PepperScheduler:
 
     def start(self):
         """Register all jobs and start the scheduler."""
-        # Morning brief
         self._scheduler.add_job(
             self.generate_morning_brief,
             CronTrigger(hour=self.config.MORNING_BRIEF_HOUR, minute=self.config.MORNING_BRIEF_MINUTE),
             id="morning_brief",
             replace_existing=True,
         )
-
-        # Commitment check — daily at noon
         self._scheduler.add_job(
             self.check_commitments,
             CronTrigger(hour=12, minute=0),
             id="commitment_check",
             replace_existing=True,
         )
-
-        # Weekly review — configurable day/hour
         self._scheduler.add_job(
             self.generate_weekly_review,
-            CronTrigger(day_of_week=self.config.WEEKLY_REVIEW_DAY, hour=self.config.WEEKLY_REVIEW_HOUR, minute=0),
+            CronTrigger(
+                day_of_week=self.config.WEEKLY_REVIEW_DAY,
+                hour=self.config.WEEKLY_REVIEW_HOUR,
+                minute=0,
+            ),
             id="weekly_review",
             replace_existing=True,
         )
-
-        # Memory compression — Sunday 02:00 UTC
         self._scheduler.add_job(
             self.run_memory_compression,
             CronTrigger(day_of_week=6, hour=2, minute=0),
             id="memory_compression",
             replace_existing=True,
         )
-
         self._scheduler.start()
         logger.info("scheduler_started", jobs=[j.id for j in self._scheduler.get_jobs()])
 
@@ -61,162 +63,130 @@ class PepperScheduler:
         self._scheduler.shutdown(wait=False)
         logger.info("scheduler_stopped")
 
-    # ─── Jobs ──────────────────────────────────────────────────────────────
+    # ── Jobs ──────────────────────────────────────────────────────────────────
 
     async def generate_morning_brief(self) -> str:
-        logger.info("generating_morning_brief")
-        today = datetime.now().strftime("%A, %B %-d, %Y")
+        """Trigger a morning brief via pepper.chat().
 
-        # Try calendar subsystem (graceful degradation)
-        calendar_summary = ""
-        try:
-            result = await self.pepper.tool_router.call_tool(
-                "calendar", "get_upcoming_events", {"days": 1}
-            )
-            if "error" not in result:
-                events = result.get("result", result)
-                if isinstance(events, list):
-                    calendar_summary = "\n".join(
-                        f"  {e.get('time', '')} — {e.get('title', e.get('summary', ''))}"
-                        for e in events[:5]
-                    )
-                elif isinstance(events, str):
-                    calendar_summary = events
-        except Exception as e:
-            logger.warning("calendar_unavailable", error=str(e))
+        The morning_brief skill injects the workflow into the system prompt.
+        heavy=True ensures all data sources (calendar, memory, email) are fetched.
 
-        # Pull open loops from memory
-        open_loops = await self.pepper.memory.search_recall(
-            "open loop OR unresolved OR pending OR waiting", limit=5
+        Each run uses a date-stamped session ID and isolated=True so no scheduler
+        turns ever touch the shared working-memory deque or bleed into user sessions.
+        """
+        tz = ZoneInfo(self.config.TIMEZONE)
+        today = datetime.now(tz).strftime("%A, %B %-d, %Y")
+        logger.info("generating_morning_brief", date=today)
+
+        session_id = f"scheduler_morning_brief_{datetime.now(tz).strftime('%Y%m%d')}"
+        brief_text = await self.pepper.chat(
+            f"Generate my morning brief for {today}.",
+            session_id=session_id,
+            heavy=True,
+            isolated=True,
         )
 
-        # Pull pending commitments
-        commitments = await self.pepper.memory.search_recall(
-            "COMMITMENT: OR I will OR follow up OR I'll send OR I'll intro", limit=5
-        )
-        # Filter out resolved ones
-        commitments = [c for c in commitments if not c.get("content", "").startswith("[RESOLVED]")]
-
-        # Comms health signal (graceful degradation)
-        comms_health_section = ""
-        try:
-            from agent.comms_health_tools import get_comms_health_brief_section
-            comms_health_section = await get_comms_health_brief_section(quiet_days=14)
-        except Exception as e:
-            logger.warning("comms_health_brief_skip", error=str(e))
-
-        # Generate brief via LLM if we have enough context
-        formatted = self.formatter.format_morning_brief(today, calendar_summary, open_loops, commitments)
-        if comms_health_section:
-            formatted += f"\n\n{comms_health_section}"
-
-        # Synthesize with Pepper LLM for a more natural brief
-        try:
-            result = await self.pepper.llm.chat(
-                messages=[{
-                    "role": "system",
-                    "content": self.pepper._system_prompt,
-                }, {
-                    "role": "user",
-                    "content": (
-                        f"Generate my morning brief for {today}. "
-                        f"Calendar: {calendar_summary or 'no events found'}. "
-                        f"Open loops: {[o.get('content', '')[:80] for o in open_loops]}. "
-                        f"Pending commitments: {[c.get('content', '')[:80] for c in commitments]}. "
-                        "Be brief, direct, actionable. Lead with the most important thing. Max 5 bullet points."
-                    )
-                }],
-                model=f"local/{self.config.DEFAULT_LOCAL_MODEL}"
-            )
-            brief_text = result.get("content") or formatted
-        except Exception as e:
-            logger.warning("brief_llm_failed", error=str(e))
-            brief_text = formatted
-
-        # Save to memory
+        # Guaranteed persistence: save here rather than relying on the model to
+        # follow the skill's save_memory instruction (skills are guidance, not
+        # mandates). The morning_brief skill no longer includes a save_memory step
+        # so there is no duplication.
         await self.pepper.memory.save_to_recall(
-            f"Morning brief sent: {today}\n{brief_text[:300]}", importance=0.7
+            f"MORNING BRIEF ({today}): {brief_text[:500]}",
+            importance=0.6,
         )
-
-        # Push via Telegram
         await self._send(brief_text)
-
-        # Audit log
         await self._audit("morning_brief_sent", f"Brief for {today}")
         self._last_brief = datetime.utcnow()
-
         logger.info("morning_brief_sent", date=today)
         return brief_text
 
-    async def check_commitments(self) -> list[dict]:
+    async def check_commitments(self) -> str:
+        """Surface open commitments via pepper.chat().
+
+        The notification decision is made from structured recall-memory results,
+        not by parsing the LLM's free-form response — this avoids false triggers
+        when the model paraphrases a "nothing to do" answer in an unexpected way.
+        """
         logger.info("checking_commitments")
-        results = await self.pepper.memory.search_recall(
-            "COMMITMENT: OR I will OR follow up OR I'll send OR I'll intro OR I'll reach out",
-            limit=15
+
+        # Query recall memory for commitment entries and filter out resolved ones.
+        # If memory is unavailable (no DB/embeddings), fall through and notify anyway
+        # rather than silently drop a potential reminder.
+        raw = await self.pepper.memory.search_recall("COMMITMENT", limit=20)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+        open_items = []
+        for item in raw:
+            content = item.get("content", "").upper()
+            if not content.startswith("COMMITMENT:"):
+                continue
+            if content.startswith("COMMITMENT: [RESOLVED]"):
+                continue
+            # Skip commitments recorded in the last 48 hours — they don't need a
+            # reminder yet. Items with no parseable timestamp are included so we
+            # never silently drop a reminder.
+            created_raw = item.get("created_at")
+            if created_raw:
+                try:
+                    created = datetime.fromisoformat(created_raw)
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    if created > cutoff:
+                        continue
+                except ValueError:
+                    pass
+            open_items.append(item)
+
+        if not open_items:
+            logger.info("commitment_check_no_open_items")
+            await self._audit("commitment_check", "no open commitments")
+            return ""
+
+        session_id = f"scheduler_commitment_check_{datetime.now(ZoneInfo(self.config.TIMEZONE)).strftime('%Y%m%d_%H')}"
+        response = await self.pepper.chat(
+            "Commitment check: list any open commitments older than 48 hours. "
+            "Skip anything already resolved.",
+            session_id=session_id,
+            heavy=True,
+            isolated=True,
         )
 
-        # Filter: unresolved and older than 48h
-        cutoff = datetime.utcnow() - timedelta(hours=48)
-        pending = []
-        for r in results:
-            content = r.get("content", "")
-            if content.startswith("[RESOLVED]"):
-                continue
-            try:
-                created = datetime.fromisoformat(r.get("created_at", ""))
-                if created < cutoff:
-                    pending.append(r)
-            except Exception:
-                pass
-
-        if pending:
-            lines = ["⏰ **Commitment reminder** — these are still open:\n"]
-            for p in pending[:5]:
-                lines.append(f"• {p.get('content', '')[:120]}")
-            message = "\n".join(lines)
-            await self._send(message)
-            await self._audit("commitment_check", f"Reminded about {len(pending)} commitments")
-        else:
-            await self._audit("commitment_check", "No pending commitments found")
-
-        return pending
+        await self._send(response)
+        await self._audit("commitment_check", response[:200])
+        return response
 
     async def generate_weekly_review(self) -> str:
-        logger.info("generating_weekly_review")
-        week_label = datetime.now().strftime("Week of %B %-d, %Y")
+        """Trigger a weekly review via pepper.chat().
 
-        memories = await self.pepper.memory.get_recent_recall(days=7)
-        commitments = await self.check_commitments()
+        The weekly_review skill guides the response: this week's highlights,
+        open loops, next week's calendar, and forward-looking priorities.
 
-        formatted = self.formatter.format_weekly_review(week_label, memories, commitments)
+        Each run uses a week-stamped session ID and isolated=True so no scheduler
+        turns ever touch the shared working-memory deque or bleed into user sessions.
+        """
+        tz = ZoneInfo(self.config.TIMEZONE)
+        week_label = datetime.now(tz).strftime("Week of %B %-d, %Y")
+        logger.info("generating_weekly_review", week=week_label)
 
-        try:
-            result = await self.pepper.llm.chat(
-                messages=[{
-                    "role": "system",
-                    "content": self.pepper._system_prompt,
-                }, {
-                    "role": "user",
-                    "content": (
-                        f"Generate my weekly review for {week_label}. "
-                        f"This week's memories: {[getattr(m, 'content', str(m))[:80] for m in memories[:10]]}. "
-                        "Summarize what happened, what's still open, and what needs attention next week."
-                    )
-                }],
-                model=f"local/{self.config.DEFAULT_LOCAL_MODEL}"
-            )
-            review_text = result.get("content") or formatted
-        except Exception as e:
-            logger.warning("review_llm_failed", error=str(e))
-            review_text = formatted
+        session_id = f"scheduler_weekly_review_{datetime.now(tz).strftime('%Y_%W')}"
+        review_text = await self.pepper.chat(
+            f"Generate my weekly review for {week_label}.",
+            session_id=session_id,
+            heavy=True,
+            isolated=True,
+        )
 
+        # Guaranteed persistence: save here rather than relying on the model to
+        # follow the skill's save_memory instruction (skills are guidance, not
+        # mandates). The weekly_review skill no longer includes a save_memory step
+        # so there is no duplication.
         await self.pepper.memory.save_to_recall(
-            f"Weekly review: {week_label}\n{review_text[:300]}", importance=0.8
+            f"WEEKLY REVIEW ({week_label}): {review_text[:500]}",
+            importance=0.7,
         )
         await self._send(review_text)
         await self._audit("weekly_review_sent", week_label)
         self._last_review = datetime.utcnow()
-
+        logger.info("weekly_review_sent", week=week_label)
         return review_text
 
     async def run_memory_compression(self) -> dict:
@@ -233,7 +203,7 @@ class PepperScheduler:
             "running": self._scheduler.running,
         }
 
-    # ─── Helpers ───────────────────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     async def _send(self, text: str) -> None:
         if self.bot:

@@ -327,14 +327,14 @@ Context: Phases 1–2 proved the architecture works. Before building more capabi
 
 **Goal**: Encode repeatable workflows as structured, self-improving skills instead of hard-coded Python
 **Estimated build**: ~1 week
-**Status**: Not started
+**Status**: ✅ Complete
 **Depends on**: Phase 3 complete (context compression matters — skills inflate the system prompt)
 
 Context: Pepper currently reasons from scratch on every turn. The morning brief is hard-coded in `briefs.py`, but a "weekly financial check-in" or "draft an email to X based on our recent conversations" has to be rebuilt from first principles each time. A skill system lets you teach Pepper a workflow once and reuse it, with the workflow improving over time.
 
 This is also the prerequisite for resurrecting deferred wishlist items cleanly: pre-event intelligence, deadline awareness, and enhanced commitment tracking all become skills rather than new hard-coded pipelines.
 
-### 4.1 — SKILL.md Format ⏳
+### 4.1 — SKILL.md Format ✅
 
 Define a structured markdown format with YAML frontmatter:
 
@@ -363,7 +363,7 @@ version: 1
 
 **Reference**: Hermes Agent's SKILL.md pattern (see `skills/` and `optional-skills/` in the hermes-agent repo).
 
-### 4.2 — Skill Injection ⏳
+### 4.2 — Skill Injection ✅
 
 - On each user turn, match against skills by:
   - Literal trigger phrases (fast path)
@@ -379,7 +379,7 @@ version: 1
 - `agent/core.py` (invoke matcher before prompt build)
 - `agent/life_context.py` (extend `build_system_prompt` with skill block)
 
-### 4.3 — Self-Improving Skills ⏳
+### 4.3 — Self-Improving Skills ✅
 
 - After executing a turn that used a skill, a background task reviews the interaction:
   - Did the skill's workflow actually get followed? (check tool calls made)
@@ -397,7 +397,7 @@ version: 1
 - `web/src/components/` (new "Skill improvements" view)
 - `agent/scheduler.py` (schedule reviews post-turn, debounced)
 
-### 4.4 — Initial Skill Library ⏳
+### 4.4 — Initial Skill Library ✅
 
 Seed the system by porting existing hard-coded workflows to skills:
 
@@ -409,12 +409,22 @@ Seed the system by porting existing hard-coded workflows to skills:
 
 These five validate the skill system against real workflows, not toy examples.
 
-### Phase 4 success criteria
+### Phase 4 success criteria (all met ✅)
 
-- ✅ Existing morning brief runs as a skill, not hard-coded Python (the old code path is deleted, not left as dead code)
-- ✅ Adding a new skill requires zero code changes — just a `SKILL.md` file
-- ✅ Skills can be improved post-execution via user-approved diffs
-- ✅ At least 5 working skills in the library covering real workflows
+- ✅ Existing morning brief runs as a skill, not hard-coded Python (BriefFormatter deleted; scheduler calls pepper.chat())
+- ✅ Adding a new skill requires zero code changes — just a SKILL.md file in skills/
+- ✅ Skills can be improved post-execution via user-approved diffs (SkillReviewer + /skill-improvements API)
+- ✅ 5 working skills: morning_brief, weekly_review, commitment_check, draft_reply_to_contact, prep_for_meeting
+
+**Files added/changed**:
+- New: `agent/skills.py` — loader, SkillMatcher (inject_into_prompt) ✅
+- New: `agent/skill_reviewer.py` — post-turn reviewer, improvement queue (approve/reject) ✅
+- New: `skills/morning_brief.md`, `weekly_review.md`, `commitment_check.md`, `draft_reply_to_contact.md`, `prep_for_meeting.md` ✅
+- `agent/core.py` — skill init, injection before LLM call, background review task ✅
+- `agent/scheduler.py` — all content-generation jobs now call pepper.chat() ✅
+- `agent/briefs.py` — BriefFormatter deleted; CommitmentExtractor kept ✅
+- `agent/main.py` — GET /skills, GET /skill-improvements, POST /skill-improvements/{id} ✅
+- New: `agent/tests/test_skills.py` — 25 tests including scheduler trigger coverage ✅
 
 ---
 

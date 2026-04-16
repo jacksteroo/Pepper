@@ -8,6 +8,11 @@ from __future__ import annotations
 import asyncio
 import re
 import structlog
+from agent.query_intents import (
+    WHATSAPP_QUERY_TERMS,
+    is_attention_request,
+    is_source_query,
+)
 
 logger = structlog.get_logger()
 
@@ -225,37 +230,18 @@ async def execute_whatsapp_tool(name: str, args: dict) -> dict:
     return {"error": f"Unknown WhatsApp tool: {name}"}
 
 
-_WHATSAPP_TRIGGERS = (
-    "whatsapp", "whats app", "wa ", " wa,",
-    "group chat", "family group", "friend group",
-    "family chat", "friend chat",
-)
-
 _WHATSAPP_ATTENTION_TRIGGERS = (
-    "recent",
-    "latest",
-    "new",
-    "unread",
-    "need to know",
-    "need to be aware",
-    "aware of",
-    "what should i know",
-    "anything i should know",
-    "what do i need to know",
     "who needs a reply",
-    "need a reply",
-    "needs a reply",
 )
 
 
 def is_whatsapp_attention_query(user_message: str) -> bool:
     """Detect WhatsApp-summary questions that should bypass the LLM."""
-    lower = user_message.lower()
-    if not any(t in lower for t in ("whatsapp", "whats app")):
-        return False
-    if "search" in lower or "find" in lower:
-        return False
-    return any(t in lower for t in _WHATSAPP_ATTENTION_TRIGGERS)
+    return is_attention_request(
+        user_message,
+        WHATSAPP_QUERY_TERMS,
+        extra_terms=_WHATSAPP_ATTENTION_TRIGGERS,
+    )
 
 
 def _clean_message_text(text: str, max_chars: int = 140) -> str:
@@ -383,8 +369,7 @@ async def maybe_get_whatsapp_context(user_message: str) -> str:
     model has real message text to work with. Without actual message content the model
     will hallucinate plausible-sounding messages.
     """
-    lower = user_message.lower()
-    if not any(t.lower() in lower for t in _WHATSAPP_TRIGGERS):
+    if not is_source_query(user_message, WHATSAPP_QUERY_TERMS):
         return ""
     try:
         from subsystems.communications.whatsapp_client import WhatsAppClient

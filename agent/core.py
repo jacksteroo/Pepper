@@ -5,6 +5,8 @@ import json
 import re
 import time
 import structlog
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from agent.config import Settings
 from agent.llm import ModelClient
 from agent.life_context import build_system_prompt, get_owner_name, update_life_context
@@ -15,6 +17,8 @@ from agent.models import Conversation
 from agent.briefs import CommitmentExtractor
 from agent.context_compressor import ContextCompressor
 from agent.error_classifier import ClassifiedLLMError, ErrorCategory
+from agent.skills import load_skills, SkillMatcher
+from agent.skill_reviewer import SkillReviewer
 from agent.web_search import brave_search, brave_image_search
 from agent.routing import get_driving_time
 from agent.calendar_tools import (
@@ -28,10 +32,13 @@ from agent.email_tools import (
     EMAIL_TOOLS,
     execute_get_recent_emails,
     execute_get_email_action_items,
+    execute_get_email_summary,
     execute_search_emails,
     execute_get_email_unread_counts,
     detect_email_account_scope,
+    detect_email_time_window_hours,
     is_email_action_items_query,
+    is_email_summary_query,
     maybe_get_email_context,
 )
 from agent.imessage_tools import (
@@ -93,7 +100,7 @@ IMAGE_TOOLS = [
 
 
 class PepperCore:
-    def __init__(self, config: Settings, db_session_factory=None):
+    def __init__(self, config: Settings, db_session_factory=None, skills_dir=None):
         self.config = config
         self.db_factory = db_session_factory
         self.llm = ModelClient(config)
@@ -111,6 +118,11 @@ class PepperCore:
         )
         self._scheduler = None
         self._sessions_loaded: set[str] = set()  # tracks which sessions have had history reloaded
+
+        # Phase 4: skill system
+        _skills = load_skills(skills_dir=skills_dir)
+        self._skill_matcher = SkillMatcher(_skills)
+        self._skill_reviewer = SkillReviewer(self.llm, _skills, config)
 
     @staticmethod
     def _normalize_user_text(text: str) -> str:
@@ -176,6 +188,42 @@ class PepperCore:
             lines = [f"I found {len(action_items)} likely action item(s) in {scope_text}:"]
             for item in action_items:
                 lines.append(f"- {item['formatted']}")
+            response = "\n".join(lines)
+
+        if warnings:
+            response += "\n\nWarnings: " + "; ".join(warnings)
+        return response
+
+    @staticmethod
+    def _format_email_summary_response(result: dict, account_scope: str) -> str:
+        if "error" in result:
+            return f"I couldn't scan your email inboxes: {result['error']}"
+
+        warnings = result.get("warnings", [])
+        emails = result.get("emails", [])
+        important = result.get("important", [])
+        hours = result.get("hours", 24)
+        scope_text = (
+            "your inboxes"
+            if account_scope == "all"
+            else f"your {account_scope} inbox"
+        )
+
+        if not emails:
+            response = f"I don't see any emails in {scope_text} from the last {hours} hours."
+        else:
+            lines = [f"I found {len(emails)} email(s) in {scope_text} from the last {hours} hours."]
+            if important:
+                lines.append("")
+                lines.append("Most important:")
+                for item in important:
+                    lines.append(f"- {item['formatted']}")
+            else:
+                lines.append("")
+                lines.append("Nothing looks especially urgent from the subject lines and snippets.")
+                lines.append("Recent messages:")
+                for item in emails[:5]:
+                    lines.append(f"- {item['formatted']}")
             response = "\n".join(lines)
 
         if warnings:
@@ -309,6 +357,7 @@ class PepperCore:
         progress_callback=None,
         heavy: bool | None = None,
         channel: str = "",
+        isolated: bool = False,
     ) -> str:
         """Main conversation entry point.
 
@@ -320,6 +369,11 @@ class PepperCore:
 
         channel: the interface the user is messaging from (e.g. "Telegram", "HTTP API").
         Injected into the system prompt so the model knows its context.
+
+        isolated: when True, this turn does NOT touch the shared working-memory
+        deque — no session history is loaded, no user/assistant turns are appended.
+        Use for scheduler/automation calls so they never bleed into user sessions
+        and concurrent user turns are never overwritten.
         """
         started_at = time.perf_counter()
         chat_logger = logger.bind(session_id=session_id, channel=channel or "HTTP API")
@@ -346,31 +400,37 @@ class PepperCore:
                 except Exception:
                     pass
 
-        # Reload conversation history from DB on first use after a restart
-        if session_id not in self._sessions_loaded:
-            chat_logger.info("session_history_reload_requested")
-            self._sessions_loaded.add(session_id)
-            await self._reload_session_history(session_id)
-        else:
-            chat_logger.debug("session_history_reload_skipped", reason="already_loaded")
+        # Reload conversation history from DB on first use after a restart.
+        # Skipped for isolated calls — they start fresh with no prior turns.
+        if not isolated:
+            if session_id not in self._sessions_loaded:
+                chat_logger.info("session_history_reload_requested")
+                self._sessions_loaded.add(session_id)
+                await self._reload_session_history(session_id)
+            else:
+                chat_logger.debug("session_history_reload_skipped", reason="already_loaded")
 
-        # Add to working memory
-        self.memory.add_to_working_memory("user", user_message)
-        chat_logger.info(
-            "working_memory_user_added",
-            working_memory_size=len(self.memory._working),
-            user_preview=self._preview_text(user_message, 180),
-        )
+        # Add to working memory (skipped for isolated scheduler/automation calls so
+        # those turns never appear in later user sessions).
+        if not isolated:
+            self.memory.add_to_working_memory("user", user_message)
+            chat_logger.info(
+                "working_memory_user_added",
+                working_memory_size=len(self.memory._working),
+                user_preview=self._preview_text(user_message, 180),
+            )
 
         identity_response = self._answer_identity_question(user_message)
         if identity_response is not None:
-            self.memory.add_to_working_memory("assistant", identity_response)
+            if not isolated:
+                self.memory.add_to_working_memory("assistant", identity_response)
             chat_logger.info(
                 "identity_short_circuit",
                 response_preview=self._preview_text(identity_response, 180),
             )
             chat_logger.info("chat_out", text=identity_response[:1000])
-            await self._save_conversation(session_id, user_message, identity_response)
+            if not isolated:
+                await self._save_conversation(session_id, user_message, identity_response)
             chat_logger.info(
                 "chat_complete",
                 path="identity",
@@ -415,12 +475,40 @@ class PepperCore:
                 result=self._summarize_tool_result(result),
             )
             response_text = self._format_email_action_items_response(result, account_scope)
-            self.memory.add_to_working_memory("assistant", response_text)
+            if not isolated:
+                self.memory.add_to_working_memory("assistant", response_text)
             chat_logger.info("chat_out", text=response_text[:1000])
-            await self._save_conversation(session_id, user_message, response_text)
+            if not isolated:
+                await self._save_conversation(session_id, user_message, response_text)
             chat_logger.info(
                 "chat_complete",
                 path="email_action_items",
+                duration_ms=round((time.perf_counter() - started_at) * 1000),
+            )
+            return response_text
+
+        if heavy and is_email_summary_query(user_message):
+            await _progress("Scanning recent emails...")
+            account_scope = detect_email_account_scope(user_message)
+            hours = detect_email_time_window_hours(user_message)
+            result = await execute_get_email_summary(
+                {"account": account_scope, "count": 10, "hours": hours}
+            )
+            chat_logger.info(
+                "email_summary_result",
+                account_scope=account_scope,
+                hours=hours,
+                result=self._summarize_tool_result(result),
+            )
+            response_text = self._format_email_summary_response(result, account_scope)
+            if not isolated:
+                self.memory.add_to_working_memory("assistant", response_text)
+            chat_logger.info("chat_out", text=response_text[:1000])
+            if not isolated:
+                await self._save_conversation(session_id, user_message, response_text)
+            chat_logger.info(
+                "chat_complete",
+                path="email_summary",
                 duration_ms=round((time.perf_counter() - started_at) * 1000),
             )
             return response_text
@@ -438,9 +526,11 @@ class PepperCore:
                 response_text = f"I couldn't scan your WhatsApp chats: {result['error']}"
             else:
                 response_text = result["summary"]
-            self.memory.add_to_working_memory("assistant", response_text)
+            if not isolated:
+                self.memory.add_to_working_memory("assistant", response_text)
             chat_logger.info("chat_out", text=response_text[:1000])
-            await self._save_conversation(session_id, user_message, response_text)
+            if not isolated:
+                await self._save_conversation(session_id, user_message, response_text)
             chat_logger.info(
                 "chat_complete",
                 path="whatsapp_attention",
@@ -461,9 +551,11 @@ class PepperCore:
                 response_text = f"I couldn't scan your iMessages: {result['error']}"
             else:
                 response_text = result["summary"]
-            self.memory.add_to_working_memory("assistant", response_text)
+            if not isolated:
+                self.memory.add_to_working_memory("assistant", response_text)
             chat_logger.info("chat_out", text=response_text[:1000])
-            await self._save_conversation(session_id, user_message, response_text)
+            if not isolated:
+                await self._save_conversation(session_id, user_message, response_text)
             chat_logger.info(
                 "chat_complete",
                 path="imessage_attention",
@@ -475,8 +567,9 @@ class PepperCore:
             # For follow-up questions ("what's the second priority?") the
             # current turn often won't match keyword triggers on its own.
             # Concatenate the previous user turn so trigger heuristics inherit
-            # context from the parent question.
-            history_for_triggers = self.memory.get_working_memory(limit=6)
+            # context from the parent question.  Isolated calls have no prior
+            # turns, so history_for_triggers is empty.
+            history_for_triggers = [] if isolated else self.memory.get_working_memory(limit=6)
             prior_user_turns = [m["content"] for m in history_for_triggers if m.get("role") == "user"][-3:-1]
             trigger_text = " ".join(prior_user_turns + [user_message])
 
@@ -542,7 +635,9 @@ class PepperCore:
         )
 
         # Build system prompt, optionally augmented with recalled context
-        system = self._system_prompt
+        tz = ZoneInfo(self.config.TIMEZONE)
+        now_local = datetime.now(tz)
+        system = f"[Current time: {now_local.strftime('%A, %B %-d, %Y at %-I:%M %p')} {now_local.tzname()} ({self.config.TIMEZONE})]\n\n" + self._system_prompt
         if channel:
             system = f"[Interface: You are responding via {channel}.]\n\n" + system
         if memory_context:
@@ -614,9 +709,50 @@ class PepperCore:
             )
             await _progress("Synthesizing response...")
 
+        # Phase 4.2: inject matching skill workflows into the system prompt.
+        # Skills are guidance, not mandates — the model follows them when relevant.
+        matched_skills = self._skill_matcher.match(user_message)
+        if matched_skills:
+            system = self._skill_matcher.inject_into_prompt(system, user_message)
+            # Honor skill model declarations: upgrade to frontier when any matched
+            # skill requires it.  Only applies on the heavy path — the fast path
+            # is intentionally local-only to avoid latency and cost on quick queries.
+            #
+            # Privacy guard: the heavy path injects raw personal data (email,
+            # iMessage, WhatsApp, Slack) into the system prompt, so frontier
+            # upgrades are blocked whenever any of those contexts is non-empty.
+            # Frontier models must never receive raw personal content.
+            if heavy and any(s.model == "frontier" for s in matched_skills):
+                # memory_context is included here because build_context_for_query()
+                # injects raw recalled contents verbatim — it must never reach a
+                # frontier model even when the message-channel contexts are empty.
+                has_raw_personal = any([
+                    memory_context, email_context, imessage_context,
+                    whatsapp_context, slack_context,
+                ])
+                if has_raw_personal:
+                    chat_logger.warning(
+                        "model_upgrade_blocked_raw_personal",
+                        skills=[s.name for s in matched_skills if s.model == "frontier"],
+                    )
+                else:
+                    frontier_model = self.config.DEFAULT_FRONTIER_MODEL
+                    if frontier_model != model:
+                        model = frontier_model
+                        chat_logger.info(
+                            "model_upgraded_for_skill",
+                            new_model=model,
+                            skills=[s.name for s in matched_skills if s.model == "frontier"],
+                        )
+            chat_logger.info(
+                "skills_injected",
+                names=[s.name for s in matched_skills],
+                message_preview=user_message[:80],
+            )
+
         # Working memory already includes the user message we just added.
-        # Use it as the full message history (up to 20 turns).
-        history = self.memory.get_working_memory(limit=20)
+        # Isolated calls have no shared history — use an empty list.
+        history = [] if isolated else self.memory.get_working_memory(limit=20)
         messages = [{"role": "system", "content": system}] + history
         chat_logger.info(
             "llm_messages_prepared",
@@ -639,6 +775,7 @@ class PepperCore:
         # model still overflowed) triggers a forced compress + single retry.  All
         # other errors surface a user-friendly message and abort the turn.
         response_text = ""
+        tool_calls: list = []  # populated below; kept in scope for the skill reviewer
         try:
             chat_logger.info("llm_dispatch", model=model, n_messages=len(messages), tool_count=len(tools))
             result = await self.llm.chat(messages, tools=tools or None, model=model)
@@ -735,18 +872,38 @@ class PepperCore:
                 "Try asking a more specific question, or start a fresh conversation."
             )
 
-        # Add assistant response to working memory
-        self.memory.add_to_working_memory("assistant", response_text)
-        chat_logger.info(
-            "working_memory_assistant_added",
-            working_memory_size=len(self.memory._working),
-            response_preview=self._preview_text(response_text, 180),
-        )
+        # Add assistant response to working memory (skipped for isolated calls).
+        if not isolated:
+            self.memory.add_to_working_memory("assistant", response_text)
+            chat_logger.info(
+                "working_memory_assistant_added",
+                working_memory_size=len(self.memory._working),
+                response_preview=self._preview_text(response_text, 180),
+            )
 
         chat_logger.info("chat_out", text=response_text[:1000])
 
-        # Save conversation to DB (best-effort)
-        await self._save_conversation(session_id, user_message, response_text)
+        # Phase 4.3: fire background skill review (non-blocking, best-effort).
+        # Runs after the response is ready so it never delays the user.
+        if matched_skills:
+            _tool_names_made = [
+                c.get("function", {}).get("name")
+                for c in tool_calls
+                if c.get("function", {}).get("name")
+            ]
+            asyncio.create_task(
+                self._skill_reviewer.review_turn(
+                    skill_names=[s.name for s in matched_skills],
+                    user_message=user_message,
+                    assistant_response=response_text,
+                    tool_calls_made=_tool_names_made,
+                )
+            )
+
+        # Save conversation to DB (best-effort). Isolated scheduler turns are
+        # excluded — they are synthetic automation prompts, not user conversations.
+        if not isolated:
+            await self._save_conversation(session_id, user_message, response_text)
 
         chat_logger.info(
             "chat_complete",

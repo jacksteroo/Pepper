@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     LIFE_CONTEXT_PATH: str = "docs/LIFE_CONTEXT.md"
     OWNER_NAME: str = "the owner"
 
+    # Timezone (IANA name, e.g. "America/Los_Angeles", "America/New_York")
+    TIMEZONE: str = "America/Los_Angeles"
+
     # Query depth — set ALWAYS_HEAVY=false in .env to re-enable light/heavy
     # classification (saves a local LLM call on greetings/chit-chat).
     # Default is True: every message goes through the full proactive fetch path.

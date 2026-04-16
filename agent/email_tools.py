@@ -18,24 +18,40 @@ import re
 from typing import Any
 
 import structlog
+from agent.query_intents import (
+    EMAIL_QUERY_TERMS,
+    NON_EMAIL_CHANNEL_TERMS,
+    infer_recent_hours,
+    is_action_item_request,
+    is_attention_request,
+    is_source_query,
+)
 
 logger = structlog.get_logger()
 
-_ACTION_ITEM_TRIGGERS = (
-    "action item",
-    "action items",
-    "follow up",
-    "follow-up",
-    "todo",
-    "to do",
-    "need to reply",
-    "needs a reply",
-    "needs reply",
-    "need a response",
-    "needs a response",
-    "what do i owe",
-    "what am i missing",
-    "what needs my attention",
+# Phrases that indicate the user wants a count, not a summary.
+# "how many unread emails" should route to get_email_unread_counts, not the
+# email-summary fast-path, even though "unread" is in ATTENTION_INTENT_TERMS.
+_EMAIL_COUNT_QUERY_TERMS = (
+    "how many",
+    "how much",
+    "number of unread",
+    "total unread",
+    "count my",
+)
+
+_EMAIL_SUMMARY_TRIGGERS = (
+    "anything important",
+    "important",
+    "what came in",
+    "what landed",
+    "received",
+    "came in",
+    "landed",
+    "overnight",
+    "last night",
+    "this morning",
+    "today",
 )
 
 _ACTION_PATTERNS: tuple[tuple[str, int, str], ...] = (
@@ -64,7 +80,6 @@ _ACTION_PATTERNS: tuple[tuple[str, int, str], ...] = (
     ("approval", 2, "requests approval"),
     ("confirm", 2, "requests confirmation"),
     ("review", 2, "requests review"),
-    ("send", 1, "asks for a send/follow-up"),
     ("schedule", 1, "mentions scheduling"),
     ("availability", 1, "mentions scheduling"),
 )
@@ -170,10 +185,33 @@ def detect_email_account_scope(user_message: str) -> str:
 
 
 def is_email_action_items_query(user_message: str) -> bool:
-    lower = user_message.lower()
-    if not any(t in lower for t in _EMAIL_TRIGGERS):
+    return is_action_item_request(
+        user_message,
+        EMAIL_QUERY_TERMS,
+        disallowed_terms=NON_EMAIL_CHANNEL_TERMS,
+    )
+
+
+def is_email_summary_query(user_message: str) -> bool:
+    if not is_email_query(user_message):
         return False
-    return any(t in lower for t in _ACTION_ITEM_TRIGGERS)
+    if is_email_action_items_query(user_message):
+        return False
+    # Count queries ("how many unread emails do I have?") must not short-circuit
+    # to the summary fast-path — they're served by get_email_unread_counts.
+    lower = user_message.lower()
+    if "unread" in lower and any(t in lower for t in _EMAIL_COUNT_QUERY_TERMS):
+        return False
+    return is_attention_request(
+        user_message,
+        EMAIL_QUERY_TERMS,
+        extra_terms=_EMAIL_SUMMARY_TRIGGERS,
+        disallowed_terms=NON_EMAIL_CHANNEL_TERMS,
+    )
+
+
+def detect_email_time_window_hours(user_message: str) -> int:
+    return infer_recent_hours(user_message, default=24)
 
 
 def _email_text(msg: dict[str, Any]) -> str:
@@ -231,6 +269,16 @@ def _format_action_item(msg: dict[str, Any], reasons: list[str]) -> str:
     reason_text = ", ".join(reasons) if reasons else "worth reviewing"
     prefix = f"[{account}] " if account else ""
     return f"{prefix}{subject}{unread} — from {sender}. Why: {reason_text}."
+
+
+def _format_email_summary_item(msg: dict[str, Any], reasons: list[str]) -> str:
+    account = _email_label(msg.get("account", "")) if msg.get("account") else ""
+    sender = _clean_sender(msg.get("from", ""))
+    subject = _clean_subject(msg.get("subject", ""))
+    unread = " [UNREAD]" if msg.get("unread") else ""
+    reason_text = f" Why: {', '.join(reasons)}." if reasons else ""
+    prefix = f"[{account}] " if account else ""
+    return f"{prefix}{subject}{unread} — from {sender}.{reason_text}"
 
 
 EMAIL_TOOLS = [
@@ -513,18 +561,70 @@ async def execute_get_email_action_items(args: dict) -> dict:
     return result
 
 
-_EMAIL_TRIGGERS = (
-    "email", "inbox", "gmail", "yahoo", "mail",
-    "unread", "message", "messages",
-    "did i get", "any emails", "check my email",
-    "from my", "sent me",
-)
+async def execute_get_email_summary(args: dict) -> dict:
+    account = args.get("account", "all")
+    hours = int(args.get("hours", 24))
+    count = min(int(args.get("count", 10)), 30)
+
+    recent = await execute_get_recent_emails(
+        {"account": account, "count": count, "hours": hours}
+    )
+    if "error" in recent:
+        return recent
+
+    scored_items: list[dict[str, Any]] = []
+    for index, msg in enumerate(recent.get("items", [])):
+        score, reasons = _score_actionability(msg)
+        scored_items.append(
+            {
+                "account": msg.get("account", ""),
+                "from": _clean_sender(msg.get("from", "")),
+                "subject": _clean_subject(msg.get("subject", "")),
+                "unread": bool(msg.get("unread")),
+                "score": score,
+                "reasons": reasons,
+                "formatted": _format_email_summary_item(msg, reasons),
+                "original_index": index,
+            }
+        )
+
+    important = [
+        item for item in scored_items
+        if item["score"] >= 3
+    ]
+    important.sort(
+        key=lambda item: (
+            item["score"],
+            1 if item["unread"] else 0,
+            -item["original_index"],
+        ),
+        reverse=True,
+    )
+
+    result: dict[str, Any] = {
+        "emails": scored_items,
+        "important": important[:5],
+        "count": len(scored_items),
+        "hours": hours,
+        "account": account,
+        "summary": f"{len(scored_items)} email(s) in the last {hours} hour(s).",
+    }
+    if recent.get("warnings"):
+        result["warnings"] = recent["warnings"]
+    return result
+
+
+def is_email_query(user_message: str) -> bool:
+    return is_source_query(
+        user_message,
+        EMAIL_QUERY_TERMS,
+        disallowed_terms=NON_EMAIL_CHANNEL_TERMS,
+    )
 
 
 async def maybe_get_email_context(user_message: str) -> str:
     """Proactively inject unread counts when the query is email-related."""
-    lower = user_message.lower()
-    if not any(t in lower for t in _EMAIL_TRIGGERS):
+    if not is_email_query(user_message):
         return ""
 
     try:
@@ -550,6 +650,32 @@ async def maybe_get_email_context(user_message: str) -> str:
                 lines.append(
                     "No obvious email action items surfaced from recent subject lines/snippets."
                 )
+        elif is_email_summary_query(user_message):
+            recent = await execute_get_email_summary(
+                {
+                    "account": scope,
+                    "count": 8,
+                    "hours": detect_email_time_window_hours(user_message),
+                }
+            )
+            lines.append("")
+            label = _email_label(scope) if scope != "all" else "connected accounts"
+            if recent.get("important"):
+                if scope == "all":
+                    lines.append("Recent important emails:")
+                else:
+                    lines.append(f"Recent important emails from {label}:")
+                for item in recent["important"]:
+                    lines.append(f"  - {item['formatted']}")
+            elif recent.get("emails"):
+                if scope == "all":
+                    lines.append("Recent emails:")
+                else:
+                    lines.append(f"Recent emails from {label}:")
+                for item in recent["emails"][:5]:
+                    lines.append(f"  - {item['formatted']}")
+            else:
+                lines.append("No recent emails surfaced in that time window.")
         elif scope != "all":
             recent = await execute_get_recent_emails(
                 {"account": scope, "count": 5, "hours": 72}

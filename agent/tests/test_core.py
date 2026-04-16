@@ -6,6 +6,7 @@ def make_mock_config():
     config = MagicMock()
     config.LIFE_CONTEXT_PATH = "docs/LIFE_CONTEXT.md"
     config.OWNER_NAME = "Jack Chan"
+    config.TIMEZONE = "UTC"
     config.DEFAULT_LOCAL_MODEL = "hermes3:latest"
     config.DEFAULT_FRONTIER_MODEL = "local/hermes3:latest"
     config.select_model.return_value = "local/hermes3:latest"
@@ -168,6 +169,64 @@ async def test_pepper_core_email_action_items_query_bypasses_llm():
         )
 
         assert "likely action item" in response.lower()
+        mock_llm.chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pepper_core_email_summary_query_bypasses_llm():
+    """Recent email summary requests should return deterministic inbox data."""
+    from agent.core import PepperCore
+
+    config = make_mock_config()
+
+    with patch("agent.core.ModelClient") as MockLLM, \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter") as MockRouter, \
+         patch("agent.core.build_system_prompt", return_value="system"), \
+         patch("agent.core.CommitmentExtractor") as MockExtractor, \
+         patch("agent.core.execute_get_email_summary", new=AsyncMock(return_value={
+             "important": [
+                 {
+                     "formatted": "[Personal] Deadline moved up [UNREAD] — from Boss. Why: unread, marked urgent."
+                 }
+             ],
+             "emails": [
+                 {
+                     "formatted": "[Personal] Deadline moved up [UNREAD] — from Boss. Why: unread, marked urgent."
+                 }
+             ],
+             "count": 1,
+             "hours": 12,
+         })), \
+         patch("agent.core.detect_email_account_scope", return_value="all"), \
+         patch("agent.core.detect_email_time_window_hours", return_value=12):
+
+        mock_llm = make_mock_llm()
+        MockLLM.return_value = mock_llm
+
+        mock_memory = MagicMock()
+        mock_memory.add_to_working_memory = MagicMock()
+        mock_memory.get_working_memory = MagicMock(return_value=[])
+        MockMem.return_value = mock_memory
+
+        MockRouter.return_value.check_health = AsyncMock(return_value={})
+        MockRouter.return_value.list_available_tools = AsyncMock(return_value=[])
+        MockRouter.return_value.get_status.return_value = {}
+
+        MockExtractor.return_value.has_commitment_language = MagicMock(return_value=False)
+
+        pepper = PepperCore(config)
+        pepper._initialized = True
+        pepper._system_prompt = "system"
+
+        response = await pepper.chat(
+            "summarize my emails received overnight. Anything important?",
+            "test-session",
+            heavy=True,
+        )
+
+        assert "most important" in response.lower()
+        assert "deadline moved up" in response.lower()
         mock_llm.chat.assert_not_called()
 
 

@@ -21,6 +21,7 @@ dependencies = [
     "python-telegram-bot>=22.7,<23.0",
     "pydantic-settings>=2.13,<3.0",
     "structlog>=25.5,<26.0",
+    "pyyaml>=6.0,<7.0",
     "tenacity>=9.1,<10.0",
     # Calendar subsystem
     "google-api-python-client>=2.194,<3.0",

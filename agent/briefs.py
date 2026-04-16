@@ -1,3 +1,9 @@
+"""Commitment extraction for live conversation turns.
+
+BriefFormatter has been removed — morning brief, weekly review, and commitment
+check are now generated via pepper.chat() guided by skill files in skills/.
+"""
+
 import re
 import json
 import structlog
@@ -30,7 +36,6 @@ class CommitmentExtractor:
         if not self.has_commitment_language(text):
             return []
         if not self._llm:
-            # Fallback: return raw matches
             return [{"text": text, "type": "promise", "detected_at": datetime.utcnow().isoformat()}]
         try:
             result = await self._llm.chat(
@@ -48,7 +53,6 @@ class CommitmentExtractor:
                 model=f"local/{self._llm.config.DEFAULT_LOCAL_MODEL}"
             )
             content = result.get("content", "[]").strip()
-            # Extract JSON array from response
             match = re.search(r'\[.*\]', content, re.DOTALL)
             if match:
                 items = json.loads(match.group())
@@ -58,56 +62,3 @@ class CommitmentExtractor:
         except Exception as e:
             logger.warning("commitment_extraction_failed", error=str(e))
         return []
-
-
-class BriefFormatter:
-    """Formats morning brief and weekly review into clean markdown."""
-
-    @staticmethod
-    def format_morning_brief(
-        date: str,
-        calendar_summary: str,
-        open_loops: list[dict],
-        commitments: list[dict],
-    ) -> str:
-        lines = [f"**Good morning — {date}**\n"]
-
-        if calendar_summary and calendar_summary.strip():
-            lines.append("📅 **Today**")
-            lines.append(calendar_summary)
-            lines.append("")
-
-        if open_loops:
-            lines.append("🔄 **Open loops**")
-            for item in open_loops[:5]:
-                lines.append(f"• {item.get('content', '')[:120]}")
-            lines.append("")
-
-        if commitments:
-            lines.append("✅ **Pending commitments**")
-            for item in commitments[:5]:
-                lines.append(f"• {item.get('content', '')[:120]}")
-            lines.append("")
-
-        if not open_loops and not commitments and not calendar_summary:
-            lines.append("Nothing urgent on the radar. Good day to work on something that matters.")
-
-        return "\n".join(lines)
-
-    @staticmethod
-    def format_weekly_review(week_label: str, memories: list, commitments: list) -> str:
-        lines = [f"**Weekly Review — {week_label}**\n"]
-
-        if memories:
-            lines.append("📝 **This week in memory**")
-            for m in memories[:8]:
-                lines.append(f"• {m.content[:120] if hasattr(m, 'content') else str(m)[:120]}")
-            lines.append("")
-
-        if commitments:
-            lines.append("⏳ **Unresolved commitments**")
-            for c in commitments[:5]:
-                lines.append(f"• {c.get('content', '')[:120]}")
-            lines.append("")
-
-        return "\n".join(lines)

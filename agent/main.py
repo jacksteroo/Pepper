@@ -140,7 +140,7 @@ async def put_life_context(req: LifeContextUpdate):
         from agent.life_context import update_life_context, build_system_prompt
 
         await update_life_context(req.section, req.content, db, settings.LIFE_CONTEXT_PATH)
-        _get_pepper()._system_prompt = build_system_prompt(settings.LIFE_CONTEXT_PATH)
+        _get_pepper()._system_prompt = build_system_prompt(settings.LIFE_CONTEXT_PATH, settings)
     return {"ok": True}
 
 
@@ -198,6 +198,60 @@ async def complete_commitment(memory_id: int):
     # Mark as resolved in memory by saving a resolved marker
     await _get_pepper().memory.save_to_recall(f"[RESOLVED] commitment id:{memory_id}", importance=0.4)
     return {"ok": True}
+
+
+@app.get("/skills", dependencies=[Depends(require_api_key)])
+async def list_skills():
+    """List all loaded skills with their metadata."""
+    matcher = _get_pepper()._skill_matcher
+    return {
+        "skills": [
+            {
+                "name": s.name,
+                "description": s.description,
+                "triggers": s.triggers,
+                "tools": s.tools,
+                "model": s.model,
+                "version": s.version,
+            }
+            for s in matcher.skills
+        ],
+        "count": len(matcher.skills),
+    }
+
+
+@app.get("/skill-improvements", dependencies=[Depends(require_api_key)])
+async def get_skill_improvements(status: str = "pending"):
+    """Return the skill improvement queue.
+
+    status: 'pending' (default) | 'all'
+    """
+    reviewer = _get_pepper()._skill_reviewer
+    items = reviewer.get_all_improvements() if status == "all" else reviewer.get_pending_improvements()
+    return {"improvements": items, "count": len(items)}
+
+
+class ImprovementAction(BaseModel):
+    action: str  # "approve" | "reject"
+
+
+@app.post("/skill-improvements/{improvement_id}", dependencies=[Depends(require_api_key)])
+async def act_on_improvement(improvement_id: str, req: ImprovementAction):
+    """Approve or reject a proposed skill improvement.
+
+    Approving writes the improvement note to the skill file and increments
+    the version number. The skill is reloaded on the next Pepper restart.
+    """
+    reviewer = _get_pepper()._skill_reviewer
+    if req.action == "approve":
+        ok = await reviewer.approve_improvement(improvement_id)
+    elif req.action == "reject":
+        ok = reviewer.reject_improvement(improvement_id)
+    else:
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
+    if not ok:
+        raise HTTPException(status_code=404, detail="Improvement not found or already actioned")
+    return {"ok": True, "id": improvement_id, "action": req.action}
 
 
 @app.get("/comms-health", dependencies=[Depends(require_api_key)])
