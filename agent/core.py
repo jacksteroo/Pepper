@@ -1133,17 +1133,35 @@ class PepperCore:
         """
         pending = self._pending_mcp_writes.get(session_id)
 
-        # Approved pending for this session — execute and clear.
+        # Approved pending — only allow if tool AND args match exactly what the user saw.
+        # A drifting or misbehaving model could call a different write tool (or pass
+        # different arguments) on the follow-up turn. Without this check, any approved
+        # pending would authorize whatever write happened to fire next in the session.
         if pending and pending.get("approved"):
-            del self._pending_mcp_writes[session_id]
-            logger.info(
-                "mcp_write_gate_passed",
-                session_id=session_id,
-                tool=tool_name,
-            )
-            return None  # proceed
+            tool_matches = pending.get("tool_name") == tool_name
+            args_match = pending.get("args") == args
+            if tool_matches and args_match:
+                del self._pending_mcp_writes[session_id]
+                logger.info(
+                    "mcp_write_gate_passed",
+                    session_id=session_id,
+                    tool=tool_name,
+                )
+                return None  # proceed
 
-        # No approval yet — block, store the pending, and return the confirmation prompt.
+            # Tool or args differ from what the user approved — treat as a new
+            # unapproved proposal. Clear the stale approved state first so the
+            # confirmation message reflects the actual call being attempted.
+            logger.warning(
+                "mcp_write_gate_mismatch",
+                session_id=session_id,
+                approved_tool=pending.get("tool_name"),
+                proposed_tool=tool_name,
+                args_matched=args_match,
+            )
+            del self._pending_mcp_writes[session_id]
+
+        # No valid approval — block, store the pending, and return the confirmation prompt.
         args_preview = json.dumps(args, indent=2) if args else "(no arguments)"
         self._pending_mcp_writes[session_id] = {
             "tool_name": tool_name,

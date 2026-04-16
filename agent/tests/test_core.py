@@ -445,13 +445,41 @@ class TestMCPWriteApprovalGate:
 
     def test_approved_pending_allows_execution_and_clears_state(self):
         pepper = _make_pepper_for_gate()
+        args = {"title": "bug"}
         # Simulate approval flow: block on first call, mark approved, then allow
-        pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", {"title": "bug"})
+        pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", args)
         pepper._pending_mcp_writes["sess1"]["approved"] = True
-        result = pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", {"title": "bug"})
+        # Re-call with the EXACT same tool and args that the user approved
+        result = pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", args)
         assert result is None  # gate returns None → proceed with execution
         # State is cleared after approval
         assert "sess1" not in pepper._pending_mcp_writes
+
+    def test_approved_pending_blocked_when_tool_differs(self):
+        """Approved pending must NOT authorize a different write tool (P1 regression)."""
+        pepper = _make_pepper_for_gate()
+        args = {"title": "bug"}
+        pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", args)
+        pepper._pending_mcp_writes["sess1"]["approved"] = True
+        # Model calls a DIFFERENT write tool after user approved create_issue
+        result = pepper._check_mcp_write_gate("sess1", "mcp_github_delete_repo", args)
+        assert result is not None  # gate must block the mismatched tool
+        assert result.get("approval_required") is True
+        # Stale approved state was cleared — new pending for the mismatched tool
+        assert pepper._pending_mcp_writes.get("sess1", {}).get("tool_name") == "mcp_github_delete_repo"
+        assert not pepper._pending_mcp_writes.get("sess1", {}).get("approved")
+
+    def test_approved_pending_blocked_when_args_differ(self):
+        """Approved pending must NOT authorize different arguments (P1 regression)."""
+        pepper = _make_pepper_for_gate()
+        approved_args = {"title": "harmless bug report"}
+        different_args = {"title": "DROP TABLE users; --"}
+        pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", approved_args)
+        pepper._pending_mcp_writes["sess1"]["approved"] = True
+        # Model calls the same tool but with different (potentially malicious) args
+        result = pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", different_args)
+        assert result is not None  # gate must block mismatched args
+        assert result.get("approval_required") is True
 
     def test_expired_pending_blocks_again(self):
         import time as _time
