@@ -65,6 +65,13 @@ class ToolRouter:
         """Check if a tool name is an MCP-qualified name (mcp_{server}_{tool})."""
         return tool_name.startswith("mcp_") and self._mcp_client is not None
 
+    def is_mcp_read_only_tool(self, tool_name: str) -> bool:
+        """Return True if the MCP tool declared readOnlyHint=True at discovery time."""
+        if not self._mcp_client:
+            return False
+        info = self._mcp_client.get_tool_info(tool_name)
+        return info.read_only if info else False
+
     def parse_mcp_tool_name(self, qualified_name: str) -> tuple[str, str] | None:
         """Parse mcp_{server}_{tool} into (server_name, tool_name).
 

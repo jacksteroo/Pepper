@@ -400,3 +400,105 @@ def test_config_model_routing():
         assert config.select_model("background_agent", "any") == config.DEFAULT_FRONTIER_MODEL
     except Exception:
         pass  # If .env not present, skip silently
+
+
+# ── MCP write approval gate ───────────────────────────────────────────────────
+
+
+def _make_pepper_for_gate():
+    """Return a minimal PepperCore for testing _check_mcp_write_gate."""
+    from agent.core import PepperCore
+    config = make_mock_config()
+    with patch("agent.core.ModelClient"), \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter"), \
+         patch("agent.core.build_system_prompt", return_value="system"):
+        MockMem.return_value._working = []
+        pepper = PepperCore(config)
+    return pepper
+
+
+class TestMCPWriteApprovalGate:
+    """Unit tests for _check_mcp_write_gate (P1 approval gate).
+
+    The gate is the last code-level enforcement that consequential MCP write
+    actions require explicit user approval even when allow_side_effects=True
+    on the server config.
+    """
+
+    def test_first_call_blocks_and_returns_approval_request(self):
+        pepper = _make_pepper_for_gate()
+        result = pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", {"title": "bug"})
+        assert result is not None
+        assert result.get("approval_required") is True
+        assert "mcp_github_create_issue" in result.get("message", "")
+        # Pending write was stored
+        assert "sess1" in pepper._pending_mcp_writes
+
+    def test_second_call_without_approval_still_blocks(self):
+        pepper = _make_pepper_for_gate()
+        pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", {"title": "bug"})
+        # Second call without setting approved — still blocked
+        result = pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", {"title": "bug"})
+        assert result is not None
+        assert result.get("approval_required") is True
+
+    def test_approved_pending_allows_execution_and_clears_state(self):
+        pepper = _make_pepper_for_gate()
+        # Simulate approval flow: block on first call, mark approved, then allow
+        pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", {"title": "bug"})
+        pepper._pending_mcp_writes["sess1"]["approved"] = True
+        result = pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", {"title": "bug"})
+        assert result is None  # gate returns None → proceed with execution
+        # State is cleared after approval
+        assert "sess1" not in pepper._pending_mcp_writes
+
+    def test_expired_pending_blocks_again(self):
+        import time as _time
+        pepper = _make_pepper_for_gate()
+        pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", {})
+        # Force-expire the pending write
+        pepper._pending_mcp_writes["sess1"]["approved"] = True
+        pepper._pending_mcp_writes["sess1"]["expires_at"] = _time.monotonic() - 1
+        # Expired approved pending should re-block (pending approval was deleted in chat())
+        # Simulate chat() expiry cleanup:
+        del pepper._pending_mcp_writes["sess1"]
+        result = pepper._check_mcp_write_gate("sess1", "mcp_github_create_issue", {})
+        assert result is not None  # blocked again after expiry
+
+    def test_different_sessions_are_independent(self):
+        pepper = _make_pepper_for_gate()
+        pepper._check_mcp_write_gate("sess-A", "mcp_github_create_issue", {})
+        pepper._check_mcp_write_gate("sess-B", "mcp_github_create_issue", {})
+        # Approve only sess-A
+        pepper._pending_mcp_writes["sess-A"]["approved"] = True
+        assert pepper._check_mcp_write_gate("sess-A", "mcp_github_create_issue", {}) is None
+        assert pepper._check_mcp_write_gate("sess-B", "mcp_github_create_issue", {}) is not None
+
+
+class TestMCPApprovalRegex:
+    """Verify _MCP_WRITE_APPROVAL_RE matches affirmations and rejects other messages."""
+
+    def test_approval_words_match(self):
+        from agent.core import _MCP_WRITE_APPROVAL_RE
+        affirmations = [
+            "yes", "Yes", "YES", "yeah", "yep", "yup", "sure",
+            "go ahead", "do it", "approved", "proceed", "confirm",
+            "ok", "okay", "absolutely", "please do", "sounds good",
+            "yes!", "yes.", "👍", "✅",
+        ]
+        for word in affirmations:
+            assert _MCP_WRITE_APPROVAL_RE.match(word), f"Should match: {word!r}"
+
+    def test_non_approval_messages_do_not_match(self):
+        from agent.core import _MCP_WRITE_APPROVAL_RE
+        non_approvals = [
+            "create a github issue for the login bug",
+            "what did you just propose?",
+            "no",
+            "cancel that",
+            "wait, actually no",
+            "yes but change the title first",
+        ]
+        for msg in non_approvals:
+            assert not _MCP_WRITE_APPROVAL_RE.match(msg), f"Should NOT match: {msg!r}"

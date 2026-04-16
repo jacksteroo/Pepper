@@ -194,6 +194,23 @@ def load_mcp_config(config_path: str | None = None) -> list[MCPServerConfig]:
         # Coerce args to strings in case YAML parsed numbers
         args = [str(a) for a in (entry.get("args") or [])]
 
+        # Strict boolean validation for allow_side_effects.
+        # yaml.safe_load keeps quoted values like "false" as strings, and
+        # bool("false") == True — a silent footgun in the security control
+        # that defaults writes to disabled.  Only accept actual Python booleans.
+        raw_ase = entry.get("allow_side_effects", False)
+        if not isinstance(raw_ase, bool):
+            logger.warning(
+                "mcp_config_allow_side_effects_not_bool",
+                server=entry.get("name"),
+                value=raw_ase,
+                note=(
+                    "allow_side_effects must be a YAML boolean (true/false without quotes). "
+                    "Defaulting to False (writes disabled) to keep the safe default."
+                ),
+            )
+            raw_ase = False
+
         try:
             configs.append(MCPServerConfig(
                 name=entry["name"],
@@ -201,7 +218,7 @@ def load_mcp_config(config_path: str | None = None) -> list[MCPServerConfig]:
                 args=args,
                 env=env,
                 trust_level=entry.get("trust_level", "external"),
-                allow_side_effects=bool(entry.get("allow_side_effects", False)),
+                allow_side_effects=raw_ase,
             ))
         except ValueError as e:
             logger.warning("mcp_config_invalid_server",

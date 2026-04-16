@@ -72,6 +72,19 @@ from agent.comms_health_tools import (
 
 logger = structlog.get_logger()
 
+# User responses that count as explicit approval for a pending MCP write action.
+# Conservative: single-word/short affirmations only. Longer messages are treated
+# as a new request so that a user who continues the conversation without
+# explicitly approving automatically cancels the pending write.
+_MCP_WRITE_APPROVAL_RE = re.compile(
+    r"^\s*(yes|yeah|yep|yup|sure|go ahead|do it|approve[sd]?|proceed|confirm|"
+    r"ok(?:ay)?|absolutely|please do|sounds good|👍|✅)\s*[!.]*\s*$",
+    re.IGNORECASE,
+)
+
+# How long a pending MCP write approval stays valid (seconds).
+_MCP_APPROVAL_TTL = 300.0
+
 IMAGE_TOOLS = [
     {
         "type": "function",
@@ -126,6 +139,12 @@ class PepperCore:
         _skills = load_skills(skills_dir=skills_dir)
         self._skill_matcher = SkillMatcher(_skills)
         self._skill_reviewer = SkillReviewer(self.llm, _skills, config)
+
+        # Phase 5: per-session pending MCP write approvals.
+        # Keyed by session_id. Each entry: {tool_name, args, approved, expires_at}.
+        # An entry is created when a write tool is first proposed; the user must
+        # explicitly approve before the tool executes on the following turn.
+        self._pending_mcp_writes: dict[str, dict] = {}
 
     @staticmethod
     def _normalize_user_text(text: str) -> str:
@@ -432,6 +451,30 @@ class PepperCore:
                 working_memory_size=len(self.memory._working),
                 user_preview=self._preview_text(user_message, 180),
             )
+
+        # MCP write approval detection: check if the user is confirming a pending
+        # write action from the previous turn.  Any non-approval message cancels
+        # the pending write so it cannot be accidentally triggered later.
+        pending_write = self._pending_mcp_writes.get(session_id)
+        if pending_write:
+            if time.monotonic() > pending_write["expires_at"]:
+                del self._pending_mcp_writes[session_id]
+                chat_logger.info("mcp_write_approval_expired", session_id=session_id)
+            elif _MCP_WRITE_APPROVAL_RE.match(user_message):
+                pending_write["approved"] = True
+                chat_logger.info(
+                    "mcp_write_approved",
+                    session_id=session_id,
+                    tool=pending_write.get("tool_name"),
+                )
+            else:
+                # User continued the conversation without approving — cancel.
+                del self._pending_mcp_writes[session_id]
+                chat_logger.info(
+                    "mcp_write_approval_cancelled",
+                    session_id=session_id,
+                    reason="non_approval_message",
+                )
 
         identity_response = self._answer_identity_question(user_message)
         if identity_response is not None:
@@ -977,7 +1020,7 @@ class PepperCore:
                     args = json.loads(args)
                 except json.JSONDecodeError:
                     args = {}
-            return await self._execute_tool(name, args)
+            return await self._execute_tool(name, args, session_id=session_id)
 
         tool_results: list[dict] = []
 
@@ -1071,7 +1114,60 @@ class PepperCore:
 
         return response_text
 
-    async def _execute_tool(self, name: str, args: dict) -> dict:
+    def _check_mcp_write_gate(
+        self, session_id: str, tool_name: str, args: dict
+    ) -> dict | None:
+        """Enforce the per-action approval gate for MCP write tools.
+
+        Returns None when the call may proceed (previously approved), or a dict
+        containing an approval request that the model will surface to the user.
+
+        The flow is two-turn:
+          Turn N   — model proposes write → gate blocks, stores pending, returns
+                     approval request → model asks user to confirm.
+          Turn N+1 — user replies with an affirmation (detected in chat()) →
+                     pending["approved"] = True → gate returns None → tool executes.
+
+        Any non-approval user message in turn N+1 cancels the pending write
+        (handled in chat() before this method is called).
+        """
+        pending = self._pending_mcp_writes.get(session_id)
+
+        # Approved pending for this session — execute and clear.
+        if pending and pending.get("approved"):
+            del self._pending_mcp_writes[session_id]
+            logger.info(
+                "mcp_write_gate_passed",
+                session_id=session_id,
+                tool=tool_name,
+            )
+            return None  # proceed
+
+        # No approval yet — block, store the pending, and return the confirmation prompt.
+        args_preview = json.dumps(args, indent=2) if args else "(no arguments)"
+        self._pending_mcp_writes[session_id] = {
+            "tool_name": tool_name,
+            "args": args,
+            "approved": False,
+            "expires_at": time.monotonic() + _MCP_APPROVAL_TTL,
+        }
+        logger.info(
+            "mcp_write_gate_blocked",
+            session_id=session_id,
+            tool=tool_name,
+        )
+        return {
+            "approval_required": True,
+            "proposed_action": {"tool": tool_name, "args": args},
+            "message": (
+                f"I'd like to run '{tool_name}' with these arguments:\n"
+                f"```\n{args_preview}\n```\n"
+                "This writes to an external service. "
+                "Reply 'yes' to confirm or say something else to cancel."
+            ),
+        }
+
+    async def _execute_tool(self, name: str, args: dict, session_id: str = "") -> dict:
         """Route tool call to memory tools, subsystem, or MCP server."""
         started_at = time.perf_counter()
         logger.info("tool_call_started", name=name, args=args)
@@ -1079,6 +1175,15 @@ class PepperCore:
         try:
             # Phase 5: MCP tool routing (mcp_{server}_{tool} namespace)
             if self.tool_router.is_mcp_tool(name):
+                # Per-action approval gate for write tools.
+                # Read-only tools (readOnlyHint=True) bypass this gate.
+                # The gate fires even when allow_side_effects is enabled so that
+                # an opted-in server still requires explicit per-action user consent.
+                if not self.tool_router.is_mcp_read_only_tool(name):
+                    gate = self._check_mcp_write_gate(session_id, name, args)
+                    if gate is not None:
+                        return gate
+
                 result = await self.tool_router.call_mcp_tool(name, args)
                 logger.info(
                     "tool_call_completed",

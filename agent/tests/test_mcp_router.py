@@ -78,6 +78,23 @@ class TestMCPToolDetection:
     def test_parse_native_tool_returns_none(self, router_with_mcp):
         assert router_with_mcp.parse_mcp_tool_name("get_upcoming_events") is None
 
+    def test_is_mcp_read_only_tool_false_by_default(self, router_with_mcp):
+        """Tools without readOnlyHint are not read-only (conservative default)."""
+        assert router_with_mcp.is_mcp_read_only_tool("mcp_github_create_issue") is False
+
+    def test_is_mcp_read_only_tool_true_when_annotated(self, router_with_mcp):
+        """Tools with read_only=True are correctly identified."""
+        read_info = MCPToolInfo(
+            name="search_issues", description="Search", input_schema={},
+            server_name="github", trust_level="external", read_only=True,
+        )
+        router_with_mcp._mcp_client._tool_index["mcp_github_search_issues"] = read_info
+        assert router_with_mcp.is_mcp_read_only_tool("mcp_github_search_issues") is True
+
+    def test_is_mcp_read_only_tool_false_without_client(self):
+        router = ToolRouter()
+        assert router.is_mcp_read_only_tool("mcp_anything") is False
+
 
 class TestMCPToolList:
 

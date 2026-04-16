@@ -483,6 +483,42 @@ def test_load_config_reads_allow_side_effects():
     assert local.allow_side_effects is False  # conservative default
 
 
+def test_load_config_quoted_false_string_does_not_enable_side_effects():
+    """Quoted 'false' string must NOT enable side effects (P2 regression).
+
+    yaml.safe_load keeps allow_side_effects: "false" as the Python string "false".
+    bool("false") == True, which would unintentionally enable writes.
+    The loader must reject non-bool values and default to False.
+    """
+    # Simulate what yaml.safe_load produces for a quoted value by writing raw YAML
+    raw_yaml = "servers:\n  - name: gh\n    command: npx\n    trust_level: external\n    allow_side_effects: \"false\"\n"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(raw_yaml)
+        f.flush()
+        configs = load_mcp_config(f.name)
+    os.unlink(f.name)
+
+    assert len(configs) == 1
+    assert configs[0].allow_side_effects is False, (
+        "Quoted 'false' string must be treated as False, not bool('false') == True"
+    )
+
+
+def test_load_config_quoted_true_string_does_not_enable_side_effects():
+    """Quoted 'true' string must NOT enable side effects — only real YAML booleans do."""
+    raw_yaml = "servers:\n  - name: gh\n    command: npx\n    trust_level: external\n    allow_side_effects: \"true\"\n"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(raw_yaml)
+        f.flush()
+        configs = load_mcp_config(f.name)
+    os.unlink(f.name)
+
+    assert len(configs) == 1
+    assert configs[0].allow_side_effects is False, (
+        "Quoted 'true' string must be rejected and default to False"
+    )
+
+
 def test_get_tools_side_effects_flag_reflects_read_only():
     """get_tools sets side_effects=False for read-only tools, True for others."""
     client = MCPClient()
