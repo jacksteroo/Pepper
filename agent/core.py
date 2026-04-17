@@ -722,6 +722,43 @@ class PepperCore:
             prior_user_turns = [m["content"] for m in history_for_triggers if m.get("role") == "user"][-3:-1]
             trigger_text = " ".join(prior_user_turns + [user_message])
 
+            # Phase 6.1: augment trigger_text with source-hint keywords derived
+            # from the routing decision.  The maybe_get_*_context() helpers use
+            # keyword heuristics on trigger_text; without this step, person-centric
+            # queries like "Did Sarah send anything?" would not activate any fetcher
+            # because the user's phrasing contains no source terms ("email", "slack",
+            # etc.).  The augmentation is additive — existing keyword matches still
+            # work, and the router only injects sources it is confident about.
+            _ROUTING_SOURCE_HINTS: dict[str, str] = {
+                "email": "email inbox",
+                "imessage": "text messages imessage",
+                "whatsapp": "whatsapp",
+                "slack": "slack",
+                "calendar": "calendar meeting schedule",
+            }
+            from agent.query_router import IntentType as _IntentType
+            _FETCH_INTENTS = {
+                _IntentType.PERSON_LOOKUP,
+                _IntentType.CROSS_SOURCE_TRIAGE,
+                _IntentType.ACTION_ITEMS,
+                _IntentType.INBOX_SUMMARY,
+                _IntentType.CONVERSATION_LOOKUP,
+            }
+            if routing.intent_type in _FETCH_INTENTS and routing.target_sources:
+                hint_suffix = " ".join(
+                    _ROUTING_SOURCE_HINTS[s]
+                    for s in routing.target_sources
+                    if s in _ROUTING_SOURCE_HINTS
+                )
+                if hint_suffix:
+                    trigger_text = trigger_text + " " + hint_suffix
+                    chat_logger.debug(
+                        "routing_trigger_augmented",
+                        intent=routing.intent_type.value,
+                        sources=routing.target_sources,
+                        hint_suffix=hint_suffix,
+                    )
+
             # Full proactive fetch path — inject live data before the LLM sees the question.
             # All fetches are independent I/O, so run them concurrently with gather()
             # rather than awaiting one at a time. Cuts the heavy-path latency to the

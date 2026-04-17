@@ -232,6 +232,40 @@ EVAL_CORPUS: list[EvalCase] = [
         description="WhatsApp lookup, no action-item framing",
     ),
 
+    # ── Compound capability requests (P1 fix) ─────────────────────────────────
+    EvalCase(
+        message="Can you read my email and tell me what's urgent?",
+        expected_intent=IntentType.INBOX_SUMMARY,
+        expected_sources_contain=["email"],
+        expected_action_mode=ActionMode.CALL_TOOLS,
+        description="compound capability+work request must NOT short-circuit as capability check",
+    ),
+    EvalCase(
+        message="Can you check my texts and show me the important ones?",
+        expected_intent=IntentType.INBOX_SUMMARY,
+        expected_sources_contain=["imessage"],
+        expected_action_mode=ActionMode.CALL_TOOLS,
+        description="'can you check texts and show me' = work request",
+    ),
+
+    # ── Kinship person lookups (P2 fix) ───────────────────────────────────────
+    EvalCase(
+        message="Any messages from mom?",
+        expected_intent=IntentType.PERSON_LOOKUP,
+        expected_sources_contain=[],
+        expected_action_mode=ActionMode.CALL_TOOLS,
+        expected_entities=["mom"],
+        description="kinship term 'mom' must be extracted as entity",
+    ),
+    EvalCase(
+        message="Any word from dad?",
+        expected_intent=IntentType.PERSON_LOOKUP,
+        expected_sources_contain=[],
+        expected_action_mode=ActionMode.CALL_TOOLS,
+        expected_entities=["dad"],
+        description="'word from dad' — kinship person lookup",
+    ),
+
     # ── True general chat ──────────────────────────────────────────────────────
     EvalCase(
         message="How are you?",

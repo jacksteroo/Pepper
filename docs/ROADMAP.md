@@ -534,14 +534,18 @@ Expose Pepper's own tools as an MCP server that other agents can connect to:
 
 ## Phase 6 — Intent And Capability Reliability
 
-**Goal**: Make Pepper reliably understand what the user is asking, know which sources and tools are actually available, and choose the right action path before answering
-**Estimated build**: ~2 weeks
-**Status**: ✅ Complete
+**Goal**: Make Pepper reliably understand what the user is asking, know which sources and tools are actually available, and choose the right action path before answering — and then exercise the judgment a human executive assistant would exercise on top of that foundation
+**Estimated build**: ~5 weeks (2 weeks for 6.1–6.4 shipped; ~3 weeks for 6.5–6.7 in progress)
+**Status**: 🔄 Core reliability (6.1–6.4) complete; executive-judgment layer (6.5–6.7) in progress
 **Depends on**: Phase 5 foundations in place; can begin earlier in a limited in-process form if MCP slips
 
-Context: Pepper now has the core ingredients of an executive assistant — life context, memory, communications, calendar, skills, and MCP-ready routing — but it still too often misses the point of the user's first question. The current runtime relies on a mix of broad "heavy" classification, source-specific keyword triggers, prompt instructions, and a flat tool list. That is good enough for obvious requests and brittle for natural language. Phase 6 is the reliability phase: it turns Pepper from "has the tools" into "consistently uses the right tools for the right ask."
+Context: Pepper now has the core ingredients of an executive assistant — life context, memory, communications, calendar, skills, and MCP-ready routing — but it still too often misses the point of the user's first question. The current runtime relies on a mix of broad "heavy" classification, source-specific keyword triggers, prompt instructions, and a flat tool list. That is good enough for obvious requests and brittle for natural language. Phase 6 is the reliability phase: it turns Pepper from "has the tools" into "consistently uses the right tools for the right ask" — and then, in 6.5–6.7, from "consistently routed" into "reliably exercises executive judgment."
 
-This phase is intentionally narrow. It does not add new data sources, new proactive behaviors, or new product surfaces. It fixes the three blockers that keep Pepper from feeling like a trustworthy executive assistant:
+The first four subphases (6.1–6.4) were intentionally narrow: a real router, prompt/tool contract hygiene, an explicit capability registry, and an EA-focused eval harness. They fixed the blockers that kept Pepper from parsing ordinary executive-assistant language.
+
+6.5–6.7 extend Phase 6 rather than opening a new phase, because the gaps they close are part of the same question: "does Pepper understand the ask, and does it act like someone who is paid to get it right?" They sit on top of 6.1–6.4 and are what turn reliable routing into reliable judgment — the difference between a switchboard and an assistant.
+
+Subphases 6.1–6.4 address the three routing-level blockers:
 
 - no real first-pass intent router
 - drift between prompt claims and actual tool contracts
@@ -696,13 +700,130 @@ This phase is intentionally narrow. It does not add new data sources, new proact
 - New: `agent/tests/test_query_router.py` — 70 tests including prompt/tool registry regression ✅
 - New: `agent/tests/test_capability_registry.py` — 33 tests including async populate() probes ✅
 
-### Phase 6 success criteria (all met ✅)
+### Phase 6.1–6.4 success criteria (all met ✅)
 
 - ✅ Pepper correctly identifies the user's intent and likely source in ordinary language
 - ✅ Pepper stops falsely claiming it cannot read email/messages/calendar when tools exist
 - ✅ Capability answers are grounded in live system state, not prompt memory
 - ✅ Exec-assistant queries about inbox, messages, schedule, and follow-ups feel reliably routed rather than brittle
-- ✅ 543 tests passing, zero regressions from prior phases
+- ✅ 570 tests passing, zero regressions from prior phases
+
+---
+
+### The executive-judgment gap (motivating 6.5–6.7)
+
+Using 6.1–6.4 in practice surfaced a second class of failure that routing alone cannot fix. Pepper now understands *what is being asked* and *which tools exist* — but it still behaves like a switchboard rather than an assistant in several recurring, specific ways:
+
+- it routes to a source even when the capability registry knows that source is unavailable
+- it fails to extract possessives, nicknames, or event-relative time scopes ("since Thursday", "before my 3pm")
+- it treats every turn as stateless — "any urgent?" right after an email question does not inherit email context
+- the capability registry is populated once at startup and never refreshed, so a permission revoked mid-session goes unnoticed
+- registry status is not surfaced to the LLM or to the web UI, so graceful fallback reads as a generic apology rather than a precise explanation
+- commitments are captured to memory but never followed through — "I'll reply tonight" disappears
+- no draft-and-queue path exists for outbound messages, so Pepper either sends immediately or does nothing
+- there is no priority grading that adapts to the user's actual attention patterns
+- the router can set `needs_clarification` but nothing ever reads it, so Pepper guesses instead of asking
+
+6.5–6.7 close these specific gaps. They are the smallest set of changes that turn Pepper from a well-routed chatbot into something that feels like an EA.
+
+### 6.5 — Router Hardening
+
+**Problem**: The router introduced in 6.1 is deterministic and reliable for common phrasings, but a handful of known holes cause real misroutes in natural EA language. These are all narrow, contained problems — none of them require an LLM classifier, and fixing them inside the deterministic layer keeps the router fast and auditable.
+
+**Approach**:
+
+- **Registry-aware routing**: `QueryRouter.route()` already accepts a `CapabilityRegistry` but ignores it. When the registry marks a requested source `not_configured` / `permission_required` / `temporarily_unavailable`, the router should narrow `target_sources` to the reachable set, or — if nothing reachable — set `needs_clarification=True` with a reasoning string the UI can render.
+- **Possessive and indirect entity extraction**: add `\b([A-Z][a-z]+)'s\b` and `"[name]'s [noun]"` patterns alongside the existing kinship extraction so "Mike's latest email" and "reply to Sarah's thread" produce the right `entity_targets`.
+- **Relative and event-relative time scope**: extend `_TIME_SCOPE_TABLE` to cover "since [day-of-week]", "over the last few days", "in the last N hours", and event-anchored phrases like "before my 3pm" (resolved against the calendar client when available).
+- **Short conversation carry-over**: when the current turn has no source terms but the previous 1–2 user turns did, inherit those sources with reduced confidence. This makes follow-ups like "anything urgent?" after an email question work correctly, and is easier to reason about than full conversational state.
+- **Multi-intent split**: when a single message mentions two independent source/time/entity targets joined by " and "/"; ", emit a list of routing decisions rather than one. `core.py` dispatches each in parallel and merges the responses.
+
+**Files touched**:
+
+- `agent/query_router.py` (registry consultation, possessive regex, time-scope table extension, carry-over, multi-intent)
+- `agent/core.py` (pass registry into router; handle multi-decision output)
+- `agent/tests/test_query_router.py` (expanded cases for each new pattern)
+- `agent/tests/test_exec_assistant_eval.py` (new eval cases for possessives, relative time, carry-over)
+
+**Success criteria**:
+
+- Queries targeting unavailable sources either re-route or surface a clarifying question rather than failing at tool time
+- Possessive and event-relative phrasings route as cleanly as their direct equivalents
+- "Anything urgent?" following an email question routes to email, not to cross-source triage
+- Multi-intent queries produce multi-decision output, verified in evals
+
+### 6.6 — Capability Registry As A Live Organ
+
+**Problem**: The registry from 6.3 is populated at startup and then frozen. A permission granted or revoked mid-session does not propagate. The LLM never sees registry state, so when routing falls through to general chat, Pepper's apology for a failed tool call reads as generic ("something went wrong") rather than precise ("WhatsApp needs Full Disk Access"). The `/capabilities` REST endpoint exists but is not rendered in the web UI.
+
+**Approach**:
+
+- **Runtime refresh on failure**: wrap tool execution in `agent/tool_router.py` so that tools returning `{"error": "..."}` with recognizable permission/auth patterns trigger `CapabilityRegistry.update_status()`. Classification reuses the `ErrorCategory` taxonomy from Phase 3.3 — `auth`, `permission_required`, `temporarily_unavailable` all map cleanly.
+- **Prompt injection of registry state**: `build_system_prompt()` already receives the registry. Extend `build_capability_block()` to include a compact status line for each source (`available` / `permission_required` + reason / `not_configured`). The model can then answer "why" questions precisely without a separate capability-check short-circuit.
+- **Web UI surface**: add a small "Capabilities" panel to the web app that calls `GET /capabilities` and renders status per source with a remediation hint. This is the user-facing expression of the same truth the router and prompt consume.
+- **Periodic re-probe**: `CapabilityRegistry.populate()` gets a `refresh()` wrapper called on a slow scheduler (every ~15 minutes) and on-demand after failure. Covers the case where a user grants FDA without restarting Pepper.
+
+**Files touched**:
+
+- `agent/capability_registry.py` (refresh hook, failure-driven update mapping)
+- `agent/tool_router.py` (classify tool errors → update registry)
+- `agent/life_context.py` (registry-aware capability block in system prompt)
+- `agent/scheduler.py` (periodic refresh job)
+- `web/src/components/` (new Capabilities panel)
+- `agent/tests/test_capability_registry.py` (runtime update paths, prompt injection assertions)
+
+**Success criteria**:
+
+- A permission revoked mid-session updates the registry within one tool call
+- The system prompt reflects current registry state, and the LLM's explanations for unavailable sources are precise (no generic "something went wrong")
+- The web UI shows current capability status with remediation text
+- Existing privacy-boundary tests from 5.3 still pass unchanged
+
+### 6.7 — Executive Judgment Behaviors
+
+**Problem**: Even with perfect routing and honest capability reporting, Pepper still behaves like a switchboard rather than an assistant. It does not draft and queue outbound messages, does not follow through on the commitments it captures, does not ask clarifying questions when the routing is ambiguous, and does not grade attention requests by the user's actual response patterns. These are the specific gaps between "uses the right tools" and "acts like someone paid to get things right."
+
+This is the largest of the three extension subphases and the one with the most user-visible value. It should only begin after 6.5 and 6.6 are stable — each behavior here depends on the router and registry being reliable.
+
+**Approach**:
+
+- **Draft-and-queue outbound actions**: all outbound writes (email send, message send, event create) route through a pending-actions queue rather than executing directly. Queued drafts are surfaced in Telegram and the web UI with explicit approve/edit/reject controls. Uses the existing MCP write-approval gating from Phase 5 as the substrate. The `draft_reply_to_contact` skill becomes the first consumer.
+- **Commitment follow-through**: `CommitmentExtractor` already persists commitments; add a scheduler job that re-surfaces unresolved commitments at the relevant time (morning brief for "today" commitments, end-of-day for "by EOD", next-morning for "tonight"). On user response, mark resolved. This turns memory into action.
+- **Clarifying-question path**: `RoutingDecision.needs_clarification` currently a dead field — wire it end-to-end. When the router sets it True (either from ambiguity or from 6.5's registry routing), `core.py` bypasses the LLM and emits a deterministic clarifying question with the candidate sources/entities as options. The user's reply feeds a second routing pass with those options pre-resolved.
+- **Priority grading v1 (no learning yet)**: a `PriorityGrader` that combines signals already collected — communication health (last contact per channel), life-context VIPs, keyword urgency, calendar proximity — into an `urgent | important | defer | ignore` tag on each item surfaced in inbox summaries and cross-source triage. No adaptive learning in v1; that becomes a follow-up once the tagging is trusted.
+- **Tool disambiguation via routing intent**: now that routing is richer, replace the ad-hoc early-exit for action-items vs summary in `core.py` with an explicit `intent → tool` mapping, and remove overlapping tool triggers from skill files that 6.5's router already covers.
+
+**Deferred from this subphase (but noted for visibility)**:
+
+- Adaptive priority learning from actual response latency per contact — needs the static grader shipped and instrumented first
+- Ambient awareness (suppress morning brief during a meeting, batch during focus mode) — depends on calendar-presence detection and focus-mode signals that are not yet wired
+
+**Files touched**:
+
+- New: `agent/pending_actions.py` (draft queue, approve/edit/reject)
+- New: `agent/commitment_followup.py` (scheduler-driven re-surfacing)
+- New: `agent/priority_grader.py` (non-learning v1 grader)
+- `agent/query_router.py` (wire `needs_clarification` emissions)
+- `agent/core.py` (clarifying-question dispatch; priority-grader integration in summary paths)
+- `agent/scheduler.py` (commitment follow-through job)
+- `skills/draft_reply_to_contact.md` (route through pending-actions)
+- `web/src/components/` (pending-actions panel, clarifying-question prompt)
+- `agent/tests/` (new suites for pending actions, commitment follow-through, clarifying-question path, priority grader, end-to-end EA scenarios)
+
+**Success criteria**:
+
+- No outbound write executes without user approval or a durable auto-approve flag for a specific action type
+- Unresolved commitments from yesterday surface in today's brief and are marked resolved on user action
+- Ambiguous queries ("check messages") produce a clarifying question, not a guess
+- Items in inbox summaries are ranked by a priority tag that matches the user's intuition on a new eval slice (≥20 cases)
+- The ad-hoc action-items early-exit in `core.py` is replaced by intent-driven tool selection and removed
+
+### Phase 6.5–6.7 success criteria (rolls up to Phase 6 when all met)
+
+- Router respects live capability state and asks clarifying questions instead of guessing
+- Capability registry is a live organ: failures refresh it, prompt reflects it, UI renders it
+- Pepper drafts-and-queues every outbound write, follows through on captured commitments, and grades attention by user-specific signals
+- New eval slice for executive-judgment scenarios (pending actions, follow-through, clarification, priority) passes with zero regressions on the 6.1–6.4 eval corpus
 
 ---
 

@@ -294,6 +294,68 @@ def test_general_chat_fallback(router, message):
     assert d.confidence < 1.0
 
 
+# ── Compound capability check (P1 fix) ────────────────────────────────────────
+
+@pytest.mark.parametrize("message", [
+    "Can you read my email and tell me what's urgent?",
+    "Can you check my texts and show me the important ones?",
+    "Can you get my emails and find anything from Sarah?",
+    "Do you have access to Slack? And can you show me the latest?",
+    "Can you read my email to see what needs a reply?",
+])
+def test_compound_capability_routes_to_work_not_status(router, message):
+    """Compound requests should do the work, not return a capability status."""
+    d = router.route(message)
+    assert d.intent_type != IntentType.CAPABILITY_CHECK, (
+        f"Message: '{message}'\n"
+        "Expected a work intent (not CAPABILITY_CHECK) for a compound request.\n"
+        f"Got: {d.intent_type.value} — reasoning: {d.reasoning}"
+    )
+    assert d.action_mode == ActionMode.CALL_TOOLS, (
+        f"Compound request should have action_mode=call_tools, got {d.action_mode.value}"
+    )
+
+
+# ── Kinship / lowercase person targets (P2 fix) ────────────────────────────────
+
+@pytest.mark.parametrize("message,expected_entity", [
+    ("Any messages from mom?", "mom"),
+    ("Any word from mom?", "mom"),
+    ("Any news from dad?", "dad"),
+    ("Did mom send anything?", "mom"),
+    ("Has my wife replied?", "wife"),
+    ("Anything from my husband?", "husband"),
+    ("Hear from boss lately?", "boss"),
+])
+def test_kinship_terms_extracted_as_entities(router, message, expected_entity):
+    """Lowercase kinship / relation terms must be recognized as person targets."""
+    d = router.route(message)
+    entities_lower = [e.lower() for e in d.entity_targets]
+    assert expected_entity in entities_lower, (
+        f"Message: '{message}'\n"
+        f"Expected entity '{expected_entity}' in {d.entity_targets}"
+    )
+    assert d.intent_type == IntentType.PERSON_LOOKUP, (
+        f"Message: '{message}'\n"
+        f"Expected PERSON_LOOKUP, got {d.intent_type.value}"
+    )
+
+
+@pytest.mark.parametrize("message", [
+    "Show me my email from last week",
+    "Any updates from the team?",
+    "Any word from the team?",
+])
+def test_non_person_from_clauses_do_not_extract_entities(router, message):
+    """Generic phrases like 'from the team' or 'from last week' must not produce entity targets."""
+    d = router.route(message)
+    # lowercase non-name words like "team", "last" should not appear in entity_targets
+    entities_lower = [e.lower() for e in d.entity_targets]
+    assert "last" not in entities_lower, f"'last' should not be an entity: {d.entity_targets}"
+    assert "team" not in entities_lower, f"'team' should not be an entity: {d.entity_targets}"
+    assert "week" not in entities_lower, f"'week' should not be an entity: {d.entity_targets}"
+
+
 # ── Logging (smoke test) ───────────────────────────────────────────────────────
 
 def test_router_logs_decision(router, caplog):

@@ -97,6 +97,26 @@ _CAPABILITY_TERMS = (
     "do you have my",
 )
 
+# Compound-action indicators: when any of these follow a capability phrase,
+# the user is asking Pepper to DO work, not just state its capabilities.
+# "Can you read my email and tell me what's urgent?" = work request, not capability check.
+_COMPOUND_ACTION_INDICATORS = (
+    " and tell me", " and show me", " and show", " and list",
+    " and find", " and summarize", " and give me", " and let me know",
+    " and check", " and look", " and get",
+    " to see", " to find out", " to check", " to get",
+    " tell me what", " show me what", " let me know what",
+    " what's urgent", " what is urgent", " what needs", " what should",
+    " what's important", " what is important",
+)
+
+# Cross-sentence compound: "Do you have access to Slack? And can you show me?"
+# Matches "and" + modal/request verb after a sentence boundary or mid-sentence.
+_COMPOUND_MODAL_RE = re.compile(
+    r"\band\s+(can|could|would|will|please|tell|show|give|let|list|find|check|look|get|summarize|summarise)\b",
+    re.IGNORECASE,
+)
+
 # Generic "what can you do" phrases
 _GENERIC_CAPABILITY_TERMS = (
     "what can you do", "what are your capabilities", "what can you access",
@@ -124,11 +144,30 @@ _PERSON_DID_RE = re.compile(
     r"(send|sent|message[ds]?|email[ds]?|text(?:ed)?|call(?:ed)?|reach(?:ed)?|reply|replied|respond(?:ed)?|write|written|get|gotten|hear|heard)",
     re.IGNORECASE,
 )
+# Common kinship / relation terms that appear in lowercase in natural speech.
+# Matched case-insensitively in _*_KINSHIP_RE patterns below, but in a SEPARATE
+# regex from the title-case name pattern so that [A-Z][a-z]+ stays case-SENSITIVE
+# (otherwise "last", "the", etc. would be treated as person names).
+_KINSHIP_PAT = (
+    r"(?:mom|dad|mother|father|sister|brother|wife|husband"
+    r"|son|daughter|grandma|grandpa|grandmother|grandfather"
+    r"|aunt|uncle|boss|manager|partner)"
+)
+
+# Title-case names only — NO re.IGNORECASE so "last", "the", "any" don't match
 _FROM_PERSON_RE = re.compile(
-    r"\b(from|by)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b"
+    r"\b(from|by)\s+(?:my\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b"
+)
+_FROM_KINSHIP_RE = re.compile(
+    r"\b(?:from|by)\s+(?:my\s+)?" + _KINSHIP_PAT + r"\b",
+    re.IGNORECASE,
 )
 _ABOUT_PERSON_RE = re.compile(
-    r"\b(about|regarding|hear from|word from)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b"
+    r"\b(about|regarding|hear from|word from|heard from)\s+(?:my\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b"
+)
+_ABOUT_KINSHIP_RE = re.compile(
+    r"\b(?:about|regarding|hear from|word from|heard from)\s+(?:my\s+)?" + _KINSHIP_PAT + r"\b",
+    re.IGNORECASE,
 )
 
 # Known data source names that should not be treated as person entities
@@ -186,13 +225,25 @@ def _extract_entity_targets(text: str) -> list[str]:
     for m in _PERSON_DID_RE.finditer(text):
         _add(m.group(2))
 
-    # _FROM_PERSON_RE: group(2) is always the person name
+    # _FROM_PERSON_RE: group(2) is the title-case name (case-sensitive pattern)
     for m in _FROM_PERSON_RE.finditer(text):
         _add(m.group(2))
 
-    # _ABOUT_PERSON_RE: group(2) is always the person name
+    # _FROM_KINSHIP_RE: no capture groups — the whole match is the kinship term;
+    # extract the actual kinship word as the entity (the word after "from/by [my]")
+    for m in _FROM_KINSHIP_RE.finditer(text):
+        # Pull just the kinship word from the match string
+        word = m.group(0).split()[-1]
+        _add(word)
+
+    # _ABOUT_PERSON_RE: group(2) is the title-case name
     for m in _ABOUT_PERSON_RE.finditer(text):
         _add(m.group(2))
+
+    # _ABOUT_KINSHIP_RE: same kinship extraction as _FROM_KINSHIP_RE
+    for m in _ABOUT_KINSHIP_RE.finditer(text):
+        word = m.group(0).split()[-1]
+        _add(word)
 
     return list(dict.fromkeys(targets))  # deduplicate, preserve order
 
@@ -264,8 +315,13 @@ class QueryRouter:
         time_scope = _infer_time_scope(user_message)
         entity_targets = _extract_entity_targets(user_message)
 
+        is_compound = (
+            contains_any(normalized, _COMPOUND_ACTION_INDICATORS)
+            or bool(_COMPOUND_MODAL_RE.search(user_message))
+        )
+
         # ── 1. Generic capability check ────────────────────────────────────────
-        if contains_any(normalized, _GENERIC_CAPABILITY_TERMS):
+        if contains_any(normalized, _GENERIC_CAPABILITY_TERMS) and not is_compound:
             d = RoutingDecision(
                 intent_type=IntentType.CAPABILITY_CHECK,
                 target_sources=["all"],
@@ -278,7 +334,12 @@ class QueryRouter:
             return d
 
         # ── 2. Specific capability check ───────────────────────────────────────
-        if _CAPABILITY_RE.search(user_message) or contains_any(normalized, _CAPABILITY_TERMS):
+        # Skip when the capability phrase is paired with a concrete action request
+        # ("Can you read my email and tell me what's urgent?" = work request, not a
+        # capability question). Let those fall through to the normal routing rules.
+        if not is_compound and (
+            _CAPABILITY_RE.search(user_message) or contains_any(normalized, _CAPABILITY_TERMS)
+        ):
             sources = _infer_target_sources(user_message) or ["unknown"]
             d = RoutingDecision(
                 intent_type=IntentType.CAPABILITY_CHECK,
@@ -313,6 +374,8 @@ class QueryRouter:
         if entity_targets and (
             _PERSON_DID_RE.search(user_message)
             or _FROM_PERSON_RE.search(user_message)
+            or _FROM_KINSHIP_RE.search(user_message)
+            or _ABOUT_KINSHIP_RE.search(user_message)
             or contains_any(normalized, ("hear from", "heard from", "word from"))
         ):
             sources = _infer_target_sources(user_message)
@@ -363,7 +426,14 @@ class QueryRouter:
         if inferred:
             # "Any texts?", "Any emails?" → the word "any" at the start signals a
             # summary request even though it's not in ATTENTION_INTENT_TERMS.
-            is_attention = contains_any(normalized, ATTENTION_INTENT_TERMS) or normalized.startswith("any ")
+            # Compound work requests ("read email and tell me what's urgent")
+            # are summary-shaped by definition — the user wants filtered output,
+            # not the raw conversation list.
+            is_attention = (
+                contains_any(normalized, ATTENTION_INTENT_TERMS)
+                or normalized.startswith("any ")
+                or is_compound
+            )
             if is_attention:
                 intent = IntentType.INBOX_SUMMARY
                 reason = "attention-intent + source terms"
