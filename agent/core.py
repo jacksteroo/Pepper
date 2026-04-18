@@ -218,6 +218,33 @@ class PepperCore:
             return normalized
         return f"{normalized[:max_chars]}..."
 
+    @staticmethod
+    def _sanitize_owner_address(text: str, owner_first: str) -> str:
+        """Replace third-person owner name references with second-person equivalents.
+
+        Hermes3 sometimes copies "Jack needs to..." from the life context rather
+        than addressing the owner in second person as instructed.  This filter
+        catches the most common verb patterns as a post-processing safety net.
+        """
+        name = re.escape(owner_first)
+        for verb_pat, repl in (
+            (rf"\b{name}\s+needs?\s+to\b", "You need to"),
+            (rf"\b{name}\s+needs?\b", "You need"),
+            (rf"\b{name}\s+should\b", "You should"),
+            (rf"\b{name}\s+must\b", "You must"),
+            (rf"\b{name}\s+will\b", "You will"),
+            (rf"\b{name}\s+would\b", "You would"),
+            (rf"\b{name}\s+has\s+to\b", "You have to"),
+            (rf"\b{name}\s+has\b", "You have"),
+            (rf"\b{name}\s+is\b", "You are"),
+            (rf"\b{name}\s+was\b", "You were"),
+            (rf"\b{name}\s+can\b", "You can"),
+            (rf"\b{name}\s+could\b", "You could"),
+            (rf"\b{name}'s\b", "your"),
+        ):
+            text = re.sub(verb_pat, repl, text)
+        return text
+
     @classmethod
     def _summarize_context_block(cls, value: str) -> dict[str, object]:
         normalized = re.sub(r"\s+", " ", (value or "")).strip()
@@ -1455,8 +1482,12 @@ class PepperCore:
                 "confirmed, what's left to do, or the status of a specific trip, "
                 "event, or logistics item (e.g. 'What's left to confirm for "
                 "Orlando?', 'What still needs booking for Boston?'): answer "
-                "DIRECTLY from the Open Loops and Active Challenges sections of "
-                "your life context. Do NOT call get_upcoming_events, "
+                "DIRECTLY from all life context sections injected in this prompt — "
+                "especially 'Kids — Activities and What Needs Attention', "
+                "'Open Loops Taking Up Mental Space', and 'Active Challenges'. "
+                "Trip logistics (flights, lodging, transport) appear in the Activities "
+                "section — read that section carefully before concluding anything is "
+                "unconfirmed. Do NOT call get_upcoming_events, "
                 "get_calendar_events_range, get_driving_time, or any other tool "
                 "for these questions — the answer is in your life context.\n"
                 "10. Items listed in 'Open Loops Taking Up Mental Space' or "
@@ -1544,6 +1575,12 @@ class PepperCore:
             "what's confirmed", "what is confirmed",
             "what's missing", "what is missing",
             "confirmed and", "what do i still", "what do we still",
+            # General "where do things stand" status queries
+            "where do things stand", "where are things", "where are we with",
+            "where do we stand", "how are things going", "how is that going",
+            "what's happening with", "what is happening with",
+            "what's going on with", "what is going on with",
+            "stand with", "things stand",
             # Application / research status queries — prevent hallucination
             "did we apply", "did i apply", "have we applied", "have i applied",
             "applied to", "which programs", "which schools", "which colleges",
@@ -1611,6 +1648,39 @@ class PepperCore:
                     else:
                         _conflict_preamble = ""
 
+                    # Pre-compute a confirmed/pending status summary for any
+                    # named topic so the model gets the answer directly instead
+                    # of having to infer it from "confirmed" vs unconfirmed text.
+                    _confirmed_words = {"confirmed", "booked"}
+                    _pending_words = {"confirm", "check", "follow", "tbd", "unknown", "missing", "needed", "needed"}
+                    _topic_lines = [
+                        ln.strip()
+                        for ln in _injected.splitlines()
+                        if ln.strip() and (_topic_words & set(_re.findall(r"\b\w{4,}\b", ln.lower())))
+                    ]
+                    _topic_confirmed = [
+                        ln for ln in _topic_lines
+                        if any(w in ln.lower() for w in _confirmed_words)
+                        and not any(w in ln.lower() for w in _pending_words)
+                    ]
+                    _topic_pending = [
+                        ln for ln in _topic_lines
+                        if any(w in ln.lower() for w in _pending_words)
+                    ]
+                    if _topic_confirmed or _topic_pending:
+                        _status_lines = []
+                        if _topic_confirmed:
+                            _status_lines.append("ALREADY CONFIRMED/DONE: " + " | ".join(_topic_confirmed[:4]))
+                        if _topic_pending:
+                            _status_lines.append("STILL NEEDS ACTION: " + " | ".join(_topic_pending[:4]))
+                        _status_preamble = (
+                            "[PRE-COMPUTED STATUS for this query topic:\n"
+                            + "\n".join(_status_lines)
+                            + "\nUse this summary to answer directly — do NOT contradict it.]\n\n"
+                        )
+                    else:
+                        _status_preamble = ""
+
                     messages[-1] = {
                         "role": "user",
                         "content": (
@@ -1622,6 +1692,7 @@ class PepperCore:
                             "Open Loops section below, the answer MUST start with 'Not yet' or 'No' — "
                             "open loops are unresolved by definition. State what still needs to happen. "
                             "Do NOT add details from your training knowledge or prior conversations.]\n"
+                            + _status_preamble
                             + _conflict_preamble
                             + _injected
                             + "\n\n[Question:]\n"
@@ -1797,6 +1868,12 @@ class PepperCore:
                 "This usually means the conversation context is getting long. "
                 "Try asking a more specific question, or start a fresh conversation."
             )
+
+        # Post-process: Hermes3 sometimes uses third-person owner name in responses
+        # despite the CRITICAL instruction. Filter the most common verb patterns.
+        _owner_first = (self.config.OWNER_NAME or "").split()[0]
+        if _owner_first:
+            response_text = self._sanitize_owner_address(response_text, _owner_first)
 
         # Add assistant response to working memory (skipped for isolated calls).
         if not isolated:

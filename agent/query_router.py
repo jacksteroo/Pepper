@@ -134,6 +134,9 @@ _CROSS_SOURCE_TERMS = (
     "what's going on", "any updates", "anything to know",
     "check my messages", "my messages", "check messages",
     "any word from", "word from", "hear from anyone",
+    "on my plate", "most important", "give me a brief", "quick brief",
+    "what needs my", "what should i focus", "what should i prioritize",
+    "what's most important", "what is most important",
 )
 
 # Person-lookup regex patterns
