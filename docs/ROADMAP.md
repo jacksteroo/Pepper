@@ -176,7 +176,7 @@ See [LIFE_CONTEXT.md.example](LIFE_CONTEXT.md.example) for the annotated templat
 - Tools: `get_contact_profile`, `find_quiet_contacts`, `search_contacts`
 - `get_contact_profile`: last contact time per channel, dominant channel, multi-channel presence
 - `find_quiet_contacts`: surfaces people who've gone quiet above a threshold (default 14 days)
-- Groundwork for Corela integration
+- Groundwork for future People subsystem integration
 
 **2.6 — Communication Health Dashboard** ✅
 
@@ -845,7 +845,7 @@ This is the largest of the three extension subphases and the one with the most u
 With runtime, skills, and MCP in place, the wishlist items become dramatically cheaper to build:
 
 - **Knowledge layer** → most items become MCP server integrations (Obsidian MCP, filesystem MCP) + skills
-- **Health & Finance** → CSV parsing becomes a skill; Apple Health becomes a local MCP server
+- **Health & Finance** → CSV/export parsing becomes a skill; health sources (Apple Health, Oura Ring, Garmin, Whoop, etc.) each become a local MCP server
 - **Pre-event intelligence / deadline awareness** → already listed as planned skills in 4.4
 - **Maintenance & Security** → scheduled skills running on the background scheduler; the Phase 3.3 error classifier is the foundation
 
@@ -857,7 +857,7 @@ At that point, revisit [WISHLIST.md](WISHLIST.md) and pull items back onto the a
 
 Once the active roadmap is stable, the system begins driving its own evolution:
 
-**Pepper recommends improvements to Corela** based on observed gaps in people/relationship data. When Pepper repeatedly fails to answer a relationship question, it logs that as a Corela improvement opportunity.
+**Pepper recommends improvements to the People subsystem** based on observed gaps in people/relationship data. When Pepper repeatedly fails to answer a relationship question, it logs that as a People subsystem improvement opportunity.
 
 **Pepper recommends new skills** when it notices a workflow being reinvented from scratch repeatedly. The skill reviewer (4.3) is the first step toward this.
 

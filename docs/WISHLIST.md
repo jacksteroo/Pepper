@@ -17,7 +17,7 @@ Revisit this list quarterly, or whenever actual usage surfaces a specific gap th
 - 30 minutes before any calendar event: Pepper pushes a briefing
 - **Work events** (meetings with people): context on who you're meeting, last conversation, open items, suggested talking points
 - **Personal events** (family activities): logistics check — "Do you have what you need? Kids' gear ready? Anything to grab before leaving?"
-- Pulls context from memory and (later) Corela
+- Pulls context from memory and (later) the People subsystem
 - Different prep modes: conversation prep vs practical readiness
 
 **Why deferred**: Once the skill system (active Phase 4) is in place, this becomes a `prep_for_meeting` skill rather than hard-coded Python. Building it now would mean rewriting it later.
@@ -81,12 +81,12 @@ Revisit this list quarterly, or whenever actual usage surfaces a specific gap th
 
 > _Deferred from original Phase 5._
 
-### Apple Health Reader
+### Health Data Reader
 
-- Export and parse Apple Health XML (via Health app export)
-- Incrementally sync activity, sleep, heart rate, key health metrics
+- Support multiple health data sources: Apple Health XML export, Oura Ring, Garmin Connect, Whoop, Fitbit, and others
+- Incrementally sync activity, sleep, heart rate, HRV, and key health metrics from whichever devices the user owns
 - Pepper gains awareness of energy levels, sleep quality, activity patterns
-- Privacy: processed entirely locally
+- Privacy: all processing done locally — raw data never leaves the machine
 
 ### Financial Reader
 
@@ -156,7 +156,7 @@ Revisit this list quarterly, or whenever actual usage surfaces a specific gap th
 
 Once the active roadmap and this wishlist are stable, Pepper begins driving its own evolution:
 
-- **Pepper recommends improvements to Corela** based on observed gaps in people/relationship data
+- **Pepper recommends improvements to the People subsystem** based on observed gaps in people/relationship data
 - **Pepper recommends new subsystems** when patterns suggest a domain isn't covered
 - **Pepper evolves its own life context** as it learns more about your patterns, values, and what matters to you
 - **Pepper begins managing others** — drafting family communications, preparing you for difficult conversations, tracking how family members are doing based on all available signals

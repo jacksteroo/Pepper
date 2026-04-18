@@ -168,5 +168,6 @@ file is persisted on the host.
 - **[GUARDRAILS.md](docs/GUARDRAILS.md)** — Development guardrails based on OpenAI's harness engineering (read this first!)
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — System architecture and subsystem design
 - **[ROADMAP.md](docs/ROADMAP.md)** — Phase-by-phase build plan
+- **[CONTINUOUS_IMPROVEMENT_PLAN.md](docs/CONTINUOUS_IMPROVEMENT_PLAN.md)** — How Pepper gets iteratively better through evals, simulated chats, and judgment-focused upgrades
 - **[CLAUDE.md](CLAUDE.md)** — Instructions for Claude Code when working on this project
 - **[LLM_STRATEGY.md](docs/LLM_STRATEGY.md)** — How Pepper uses local vs frontier LLMs

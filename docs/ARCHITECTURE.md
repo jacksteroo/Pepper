@@ -39,10 +39,10 @@ Nothing is monolithic. Every layer is independently replaceable.
 ┌─────────▼──────┐ ┌───────▼──────┐ ┌──────────▼──────┐
 │   PEOPLE       │ │    TIME      │ │  COMMUNICATIONS  │
 │                │ │              │ │                  │
-│ Corela (future)│ │ Google Cal ✅ │ │ Gmail ✅         │
+│ Future layer   │ │ Google Cal ✅ │ │ Gmail ✅         │
 │ Relationship   │ │ Deadlines ⏳  │ │ Yahoo Mail ✅    │
-│ graph, scoring │ │ (needs Slack)│ │ Telegram ✅      │
-│ 61 tools       │ │ Event prep ⏳ │ │ iMessage ✅      │
+│ context +      │ │ (needs Slack)│ │ Telegram ✅      │
+│ outreach       │ │ Event prep ⏳ │ │ iMessage ✅      │
 │                │ │              │ │ WhatsApp ✅      │
 │                │ │              │ │ Slack ✅         │
 └────────────────┘ └──────────────┘ └─────────────────-┘
@@ -51,9 +51,9 @@ Nothing is monolithic. Every layer is independently replaceable.
 │   KNOWLEDGE    │ │    HEALTH    │ │    FINANCE       │
 │                │ │              │ │                  │
 │ Notes/Obsidian │ │ Apple Health │ │ Bank CSV exports │
-│ Documents      │ │ Activity     │ │ Investment feeds │
-│ Decisions log  │ │ Patterns     │ │ Planning models  │
-│ Claude history │ │              │ │                  │
+│ Documents      │ │ Oura Ring    │ │ Investment feeds │
+│ Decisions log  │ │ Garmin/Whoop │ │ Planning models  │
+│ Claude history │ │ + others     │ │                  │
 └────────────────┘ └──────────────┘ └──────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -231,9 +231,9 @@ This contract means any subsystem can be replaced without modifying Pepper Core.
 
 ### Not Yet Started
 
-- **PEOPLE** — Corela integration (future, post Phase 5)
+- **PEOPLE** — future People subsystem integration (post Phase 5)
 - **KNOWLEDGE** (post Phase 5) — Notes, documents, decision log
-- **HEALTH** (post Phase 5) — Apple Health export parsing
+- **HEALTH** (post Phase 5) — health data ingestion (Apple Health export, Oura Ring, Garmin, Whoop, and others)
 - **FINANCE** (post Phase 5) — Bank CSV parsing
 - **macOS DESKTOP APP** — Swift shell, embedded PostgreSQL, no Docker
 
