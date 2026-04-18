@@ -450,7 +450,7 @@ class QueryRouter:
                         return self._apply_registry(d, capability_registry)
 
             if not sources:
-                sources = ["email", "imessage", "whatsapp", "slack"]
+                sources = ["email", "imessage", "whatsapp", "slack", "calendar"]
             d = RoutingDecision(
                 intent_type=IntentType.CROSS_SOURCE_TRIAGE,
                 target_sources=sources,

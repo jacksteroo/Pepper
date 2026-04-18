@@ -686,6 +686,18 @@ class PepperCore:
                 "I'll dig in."
             )
 
+        if "calendar" in sources:
+            cal_result = await execute_get_upcoming_events({"days": 7})
+            if "error" in cal_result:
+                sections.append(f"Calendar: unavailable ({cal_result['error']})")
+            elif cal_result.get("events"):
+                # Each event is a pre-formatted multi-line string; use first line for brevity
+                cal_lines = [
+                    f"- {e.splitlines()[0]}" if isinstance(e, str) else f"- {e}"
+                    for e in cal_result["events"][:6]
+                ]
+                sections.append("Calendar this week:\n" + "\n".join(cal_lines))
+
         if not sections:
             return None
 
@@ -1756,11 +1768,21 @@ class PepperCore:
                     # of having to infer it from "confirmed" vs unconfirmed text.
                     _confirmed_words = {"confirmed", "booked"}
                     _pending_words = {"confirm", "check", "follow", "tbd", "unknown", "missing", "needed", "needed"}
+                    # Strip action verbs and classifier words from topic_words so
+                    # common words like "confirm" or "left" don't produce false
+                    # cross-topic matches (e.g. pre-college "confirm" ≠ Orlando item).
+                    _non_topic_words = (
+                        _confirmed_words | _pending_words
+                        | {"what", "left", "still", "need", "needs", "done", "sort", "sorted",
+                           "tell", "give", "list", "show", "have", "know", "does", "that",
+                           "this", "with", "been", "will", "when", "from", "your", "about"}
+                    )
+                    _topic_filter_words = _topic_words - _non_topic_words
                     _topic_lines = [
                         ln.strip()
                         for ln in _injected.splitlines()
-                        if ln.strip() and (_topic_words & set(_re.findall(r"\b\w{4,}\b", ln.lower())))
-                    ]
+                        if ln.strip() and (_topic_filter_words & set(_re.findall(r"\b\w{4,}\b", ln.lower())))
+                    ] if _topic_filter_words else []
                     _topic_confirmed = [
                         ln for ln in _topic_lines
                         if any(w in ln.lower() for w in _confirmed_words)
@@ -1833,10 +1855,11 @@ class PepperCore:
                         "content": (
                             "[Meal planning preferences — follow these exactly when answering the cooking question below:\n"
                             + _meal_section
-                            + "\nAdditional rules: suggest 2-3 options (not a full recipe), "
-                            "include one Asian-style option if possible, add prep-ahead or "
-                            "freezer notes, build around ingredients already mentioned, "
-                            "keep the response short.]\n\n"
+                            + "\nAdditional rules: suggest 2-3 options only. "
+                            "Format each option as one line: dish name + key flavoring or technique + one prep/storage note. "
+                            "NO step-by-step cooking instructions. NO ingredient lists. "
+                            "Include one Asian-style option if possible. "
+                            "Build around ingredients already mentioned. Keep the total response under 5 lines.]\n\n"
                             + messages[-1]["content"]
                         ),
                     }
