@@ -10,7 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 from agent.config import Settings
 from agent.llm import ModelClient
-from agent.life_context import build_system_prompt, get_owner_name, update_life_context
+from agent.life_context import build_system_prompt, get_life_context_sections, get_owner_name, update_life_context
 from agent.tool_router import ToolRouter
 from agent.query_router import QueryRouter, IntentType, ActionMode
 from agent.capability_registry import CapabilityRegistry
@@ -1485,13 +1485,70 @@ class PepperCore:
 
         # Working memory already includes the user message we just added.
         # Isolated calls have no shared history — use an empty list.
-        history = [] if isolated else self.memory.get_working_memory(limit=20)
+        # ANSWER_FROM_CONTEXT queries (life-context status checks) don't need long
+        # conversation history — the life context in the system prompt is the source.
+        # A shorter window prevents stale data from prior turns from overriding it.
+        _history_limit = 6 if routing.action_mode == ActionMode.ANSWER_FROM_CONTEXT else 20
+        history = [] if isolated else self.memory.get_working_memory(limit=_history_limit)
         messages = [{"role": "system", "content": system}] + history
         chat_logger.info(
             "llm_messages_prepared",
             n_messages=len(messages),
             history_messages=len(history),
         )
+
+        # For life-context status questions (open loops, trip confirmations, etc.)
+        # local models ignore system prompt grounding rules when long conversation
+        # history is present. Inject the relevant life context sections directly
+        # adjacent to the question so the model has the exact facts it needs.
+        _STATUS_QUERY_TERMS = (
+            "what's left", "what is left", "what still needs",
+            "still to confirm", "still need to", "left to confirm",
+            "left to book", "left to do", "what needs to be confirmed",
+            "what needs to be done", "still pending",
+            "any update on", "update on", "status of",
+            "is it sorted", "is that sorted", "is it confirmed",
+            "is that confirmed", "has it been confirmed",
+            "what's the status", "what is the status",
+            "sorted?", " sorted", "been booked", "been confirmed",
+            "confirmed yet", "booked yet", "is it booked", "been sorted",
+        )
+        if (
+            routing.action_mode == ActionMode.ANSWER_FROM_CONTEXT
+            and messages
+            and messages[-1].get("role") == "user"
+        ):
+            _last_content = messages[-1]["content"].lower()
+            if any(t in _last_content for t in _STATUS_QUERY_TERMS):
+                _lc_sections = get_life_context_sections(self.config.LIFE_CONTEXT_PATH)
+                _relevant_headings = (
+                    "Kids — Activities and What Needs Attention",
+                    "Active Challenges",
+                    "Open Loops Taking Up Mental Space",
+                )
+                _section_blocks = [
+                    f"## {h}\n{_lc_sections[h]}"
+                    for h in _relevant_headings
+                    if _lc_sections.get(h)
+                ]
+                if _section_blocks:
+                    _injected = "\n\n".join(_section_blocks)
+                    messages[-1] = {
+                        "role": "user",
+                        "content": (
+                            "[Life context facts — use these to answer the question below. "
+                            "Quote the relevant facts directly. Do NOT add details "
+                            "from your training knowledge or prior conversations.]\n"
+                            + _injected
+                            + "\n\n[Question:]\n"
+                            + messages[-1]["content"]
+                        ),
+                    }
+                    chat_logger.debug(
+                        "life_context_status_facts_injected",
+                        sections=list(_lc_sections.keys()),
+                        message_preview=user_message[:80],
+                    )
 
         # Phase 3.2: compress if approaching context window limit.
         # Compression always uses the local model — never routes to frontier.
