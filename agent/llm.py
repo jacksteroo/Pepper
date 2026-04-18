@@ -27,6 +27,10 @@ _TEXT_TOOL_CALL_PATTERNS = [
     re.compile(r'\{[^{}]*"name"\s*:\s*"(\w+)"[^{}]*"arguments"\s*:\s*(\{[^{}]*\})[^{}]*\}', re.DOTALL),
     # {"arguments": {...}, "name": "search_images"}
     re.compile(r'\{[^{}]*"arguments"\s*:\s*(\{[^{}]*\})[^{}]*"name"\s*:\s*"(\w+)"[^{}]*\}', re.DOTALL),
+    # {"function": "search_memory", "args": {...}}
+    re.compile(r'\{[^{}]*"function"\s*:\s*"(\w+)"[^{}]*"args"\s*:\s*(\{[^{}]*\})[^{}]*\}', re.DOTALL),
+    # {"args": {...}, "function": "search_memory"}
+    re.compile(r'\{[^{}]*"args"\s*:\s*(\{[^{}]*\})[^{}]*"function"\s*:\s*"(\w+)"[^{}]*\}', re.DOTALL),
 ]
 
 
@@ -37,7 +41,8 @@ def _extract_text_tool_calls(content: str) -> list[dict]:
         if not m:
             continue
         try:
-            if i == 0:
+            # Even-indexed patterns have (name, args) groups; odd have (args, name).
+            if i % 2 == 0:
                 name, args_str = m.group(1), m.group(2)
             else:
                 args_str, name = m.group(1), m.group(2)

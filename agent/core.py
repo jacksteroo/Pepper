@@ -1404,9 +1404,11 @@ class PepperCore:
                 f"0. The human user is {owner_name}. "
                 "You are Pepper. If asked who the user is, answer with the human's identity, not your own.\n"
                 f"1. The sections above (calendar, email, messages, memory, "
-                f"web) contain REAL data fetched live for this turn. Use "
-                f"ONLY that data when answering questions about {owner_first}'s "
-                "life, schedule, inbox, contacts, or commitments.\n"
+                f"web) contain REAL data fetched live for this turn. For inbox, "
+                f"schedule, and message queries: use ONLY that fetched data. "
+                f"For status/logistics questions about open loops, trips, or "
+                f"pending confirmations: answer from the life context already in "
+                f"your system prompt — do NOT say you lack information.\n"
                 "2. NEVER emit placeholder template text like "
                 "'[Commitment XYZ]', '[Name]', '[Date]', '[Project ABC]', "
                 "or any bracketed stand-in. If you don't have a specific "
@@ -1428,7 +1430,15 @@ class PepperCore:
                 "8. ONLY address the CURRENT user message — the last message in the "
                 "conversation. Prior turns are history for context only. Do NOT "
                 "re-answer, continue, or follow up on topics from earlier turns "
-                "unless the current message explicitly asks you to."
+                "unless the current message explicitly asks you to.\n"
+                "9. For questions about what's still pending, what needs to be "
+                "confirmed, what's left to do, or the status of a specific trip, "
+                "event, or logistics item (e.g. 'What's left to confirm for "
+                "Orlando?', 'What still needs booking for Boston?'): answer "
+                "DIRECTLY from the Open Loops and Active Challenges sections of "
+                "your life context. Do NOT call get_upcoming_events, "
+                "get_calendar_events_range, get_driving_time, or any other tool "
+                "for these questions — the answer is in your life context."
             )
             await _progress("Synthesizing response...")
 
@@ -1491,7 +1501,14 @@ class PepperCore:
             chat_logger.info("context_compression_complete", n_messages=len(messages))
 
         # Native tools run in-process; MCP tools route via the tool router.
-        tools = MEMORY_TOOLS + CALENDAR_TOOLS + EMAIL_TOOLS + IMESSAGE_TOOLS + WHATSAPP_TOOLS + SLACK_TOOLS + CONTACT_TOOLS + COMMS_HEALTH_TOOLS + IMAGE_TOOLS + _PENDING_ACTION_TOOLS
+        # When the router determined the answer lives in life context (ANSWER_FROM_CONTEXT),
+        # strip data-fetching tools so the model cannot call them. Only core recall tools
+        # (save/search/update memory and mark commitments) remain available.
+        if routing.action_mode == ActionMode.ANSWER_FROM_CONTEXT:
+            _RECALL_TOOL_NAMES = {"save_memory", "search_memory", "update_life_context", "mark_commitment_complete"}
+            tools = [t for t in MEMORY_TOOLS if t["function"]["name"] in _RECALL_TOOL_NAMES] + _PENDING_ACTION_TOOLS
+        else:
+            tools = MEMORY_TOOLS + CALENDAR_TOOLS + EMAIL_TOOLS + IMESSAGE_TOOLS + WHATSAPP_TOOLS + SLACK_TOOLS + CONTACT_TOOLS + COMMS_HEALTH_TOOLS + IMAGE_TOOLS + _PENDING_ACTION_TOOLS
         # Phase 5: append MCP tools discovered from external servers
         mcp_tools = self.tool_router.get_mcp_tools()
         if mcp_tools:

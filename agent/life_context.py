@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 import structlog
 from pathlib import Path
-from datetime import datetime
-from agent.config import Settings
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -265,6 +263,8 @@ Your operating principles:
 - Use update_life_context when a fact in the life context itself needs to change
 - Keep responses concise and direct
 - NEVER fabricate data, events, meetings, statistics, or facts you have not retrieved from a tool call. If you don't have tool-backed data, say "I don't have that information" — do not guess or invent details
+- If search_memory returns empty results, do NOT invent prior conversation dates, history, or research you performed — say memory has no record of that topic and answer from the life context instead
+- For questions like "Any update on X?", "What's the status of X?", "Is X sorted?", "What's left to confirm for X?", "What still needs to be done for X?", "What's still pending for X?", or "What needs attention for X?" where X is an open loop, trip, or logistics item: answer directly from the life context's Open Loops and Active Challenges sections. NEVER call calendar tools, transport tools, or any data-fetching tool for these questions — they are status checks answered from your life context knowledge, not live data requests
 {schedule_block}
 
 {capability_block}

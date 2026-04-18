@@ -88,7 +88,7 @@ MEMORY_TOOLS = [
         "side_effects": False,
         "function": {
             "name": "get_driving_time",
-            "description": "Get real-time driving duration and distance between two locations using Google Maps. Use whenever the owner asks how long it takes to drive somewhere, how far something is, or for directions.",
+            "description": "Get real-time driving duration and distance between two locations using Google Maps. ONLY use when the owner is explicitly asking how long a drive takes, how far away a specific place is, or for turn-by-turn directions. Do NOT use for account status questions, logistics planning, or any question that merely mentions a location name.",
             "parameters": {
                 "type": "object",
                 "properties": {
