@@ -52,12 +52,15 @@ _NOISE_SENDER_PATTERNS = (
     "marketing@", "promo@", "digest@", "updates@", "support+",
     "@mail.",   # marketing bulk-email subdomains: team@mail.product.com
     "@email.",  # marketing bulk-email subdomains: info@email.product.com
+    "@ebay.com", "@nextdoor.com", "@amazon.com", "@paypal.com",
 )
 _NOISE_SUBJECT_TERMS = (
     "unsubscribe", "weekly digest", "newsletter", "your receipt",
-    "order confirmation", "shipping update", "sale ", "% off",
+    "order confirmation", "shipping update", "shipping label",
+    "update on your shipping", "sale ", "% off",
     "limited time", "last chance", "black friday",
     "discover ", "smarter ways", "ways to use",  # feature-promo marketing patterns
+    "started a conversation",  # community notification platforms (Nextdoor, etc.)
 )
 
 

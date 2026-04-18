@@ -227,20 +227,36 @@ class PepperCore:
         catches the most common verb patterns as a post-processing safety net.
         """
         name = re.escape(owner_first)
+        # Optional adverb slot between name/pronoun and verb ("Jack still needs to").
+        _adv = r"(?:\s+\w+)?"
         for verb_pat, repl in (
-            (rf"\b{name}\s+needs?\s+to\b", "You need to"),
-            (rf"\b{name}\s+needs?\b", "You need"),
-            (rf"\b{name}\s+should\b", "You should"),
-            (rf"\b{name}\s+must\b", "You must"),
-            (rf"\b{name}\s+will\b", "You will"),
-            (rf"\b{name}\s+would\b", "You would"),
-            (rf"\b{name}\s+has\s+to\b", "You have to"),
-            (rf"\b{name}\s+has\b", "You have"),
-            (rf"\b{name}\s+is\b", "You are"),
-            (rf"\b{name}\s+was\b", "You were"),
-            (rf"\b{name}\s+can\b", "You can"),
-            (rf"\b{name}\s+could\b", "You could"),
+            (rf"\b{name}{_adv}\s+needs?\s+to\b", "You need to"),
+            (rf"\b{name}{_adv}\s+needs?\b", "You need"),
+            (rf"\b{name}{_adv}\s+should\b", "You should"),
+            (rf"\b{name}{_adv}\s+must\b", "You must"),
+            (rf"\b{name}{_adv}\s+will\b", "You will"),
+            (rf"\b{name}{_adv}\s+would\b", "You would"),
+            (rf"\b{name}{_adv}\s+has\s+to\b", "You have to"),
+            (rf"\b{name}{_adv}\s+has\b", "You have"),
+            (rf"\b{name}{_adv}\s+is\b", "You are"),
+            (rf"\b{name}{_adv}\s+was\b", "You were"),
+            (rf"\b{name}{_adv}\s+can\b", "You can"),
+            (rf"\b{name}{_adv}\s+could\b", "You could"),
             (rf"\b{name}'s\b", "your"),
+            # Pronoun patterns — "He/His/Him" referring to owner after name context
+            (r"\bHe\s+needs?\s+to\b", "You need to"),
+            (r"\bHe\s+also\s+needs?\s+to\b", "You also need to"),
+            (r"\bHe\s+needs?\b", "You need"),
+            (r"\bHe\s+should\b", "You should"),
+            (r"\bHe\s+must\b", "You must"),
+            (r"\bHe\s+will\b", "You will"),
+            (r"\bHe\s+has\s+to\b", "You have to"),
+            (r"\bHe\s+has\b", "You have"),
+            (r"\bHe\s+is\b", "You are"),
+            (r"\bHe\s+was\b", "You were"),
+            (r"\bHe\s+also\b", "You also"),
+            (r"\bHis\s+", "your "),
+            (r"\bHim\b", "you"),
         ):
             text = re.sub(verb_pat, repl, text)
         return text
@@ -1594,6 +1610,17 @@ class PepperCore:
             "set up", "been set up", "is it set up", "is that set up",
             "set up yet", "set up for", "been activated", "is it active",
             "is it working", "been enabled",
+            # Child program / travel timing queries
+            "when does matthew", "when is matthew", "matthew's harvard",
+            "when do i join", "when do i meet", "when does the program",
+            "harvard program", "harvard pre-college", "harvard pre",
+            "program end", "ends when", "when does the harvard",
+            "when does jack join", "when does jack meet",
+            # Partner / spouse status queries
+            "susan's career", "susan's situation", "susan's job", "susan's role",
+            "partner's career", "wife's career", "career situation",
+            "career transition", "career change", "starting at paypal",
+            "tipalti", "paypal", "susan starting", "susan's transition",
         )
         if (
             routing.action_mode in (ActionMode.ANSWER_FROM_CONTEXT, ActionMode.CALL_TOOLS)
@@ -1605,6 +1632,9 @@ class PepperCore:
                 _lc_sections = get_life_context_sections(self.config.LIFE_CONTEXT_PATH)
                 _relevant_headings = (
                     "Kids — Activities and What Needs Attention",
+                    "Children",
+                    "Travel Patterns",
+                    "Partner",
                     "Active Challenges",
                     "Open Loops Taking Up Mental Space",
                 )
