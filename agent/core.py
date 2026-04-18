@@ -573,6 +573,21 @@ class PepperCore:
         if not sections:
             return None
 
+        # Append top open loops from life context so triage briefs surface family/logistics items
+        try:
+            from agent.life_context import get_life_context_sections
+            lc_sections = get_life_context_sections(self.config.LIFE_CONTEXT_PATH)
+            open_loops_text = lc_sections.get("Open Loops Taking Up Mental Space", "")
+            if open_loops_text:
+                loop_lines = [
+                    ln.strip() for ln in open_loops_text.splitlines()
+                    if ln.strip().startswith("-")
+                ][:4]
+                if loop_lines:
+                    sections.append("Open loops:\n" + "\n".join(loop_lines))
+        except Exception:
+            pass
+
         heading = (
             "Here’s what looks most important across your inbox and messages:"
             if len(sections) > 1
