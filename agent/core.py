@@ -225,11 +225,19 @@ class PepperCore:
         Hermes3 sometimes copies "Jack needs to..." from the life context rather
         than addressing the owner in second person as instructed.  This filter
         catches the most common verb patterns as a post-processing safety net.
+
+        Pronoun patterns (He/His/Him) are applied sentence-by-sentence and skipped
+        for any sentence that contains a known family-member name, preventing
+        Matthew/Connor/Dylan/Susan's third-person pronouns from being rewritten
+        as second-person ("Matthew will fly" → wrong "You will fly").
         """
+        # Known family members whose third-person pronouns must NOT be rewritten.
+        _FAMILY_NAMES = frozenset({"Matthew", "Connor", "Dylan", "Susan"})
+
         name = re.escape(owner_first)
         # Optional adverb slot between name/pronoun and verb ("Jack still needs to").
         _adv = r"(?:\s+\w+)?"
-        for verb_pat, repl in (
+        _owner_patterns = (
             (rf"\b{name}{_adv}\s+needs?\s+to\b", "You need to"),
             (rf"\b{name}{_adv}\s+needs?\b", "You need"),
             (rf"\b{name}{_adv}\s+should\b", "You should"),
@@ -243,7 +251,9 @@ class PepperCore:
             (rf"\b{name}{_adv}\s+can\b", "You can"),
             (rf"\b{name}{_adv}\s+could\b", "You could"),
             (rf"\b{name}'s\b", "your"),
-            # Pronoun patterns — "He/His/Him" referring to owner after name context
+        )
+        # Pronoun patterns applied only in segments without family member names.
+        _pronoun_patterns = (
             (r"\bHe\s+needs?\s+to\b", "You need to"),
             (r"\bHe\s+also\s+needs?\s+to\b", "You also need to"),
             (r"\bHe\s+needs?\b", "You need"),
@@ -257,8 +267,71 @@ class PepperCore:
             (r"\bHe\s+also\b", "You also"),
             (r"\bHis\s+", "your "),
             (r"\bHim\b", "you"),
-        ):
-            text = re.sub(verb_pat, repl, text)
+        )
+
+        # Apply owner-name patterns across the full text.
+        for pat, repl in _owner_patterns:
+            text = re.sub(pat, repl, text)
+
+        # Apply pronoun patterns sentence by sentence; skip when a family member
+        # name appears in the same sentence to avoid rewriting their pronouns.
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        out: list[str] = []
+        for sent in sentences:
+            if any(fname in sent for fname in _FAMILY_NAMES):
+                out.append(sent)
+            else:
+                for pat, repl in _pronoun_patterns:
+                    sent = re.sub(pat, repl, sent)
+                out.append(sent)
+        return " ".join(out)
+
+    @staticmethod
+    def _fix_family_travel_address(text: str) -> str:
+        """Correct second-person over-application to family members' travel/activity sentences.
+
+        When the LLM says "You will be flying/going/attending" immediately after a sentence
+        about a family member (Matthew, Connor, Dylan, Susan), it has incorrectly applied the
+        second-person rule to the family member's action.  Detect and rewrite to use their name.
+        """
+        _FAMILY_NAMES = ["Matthew", "Connor", "Dylan", "Susan"]
+        # Split on sentence boundaries (preserve trailing space/punctuation).
+        parts = re.split(r"(?<=[.!?])\s+", text)
+        for i in range(1, len(parts)):
+            # Check if the current sentence starts with "You will be [verb]"
+            if not re.match(r"^You will be\b", parts[i], re.IGNORECASE):
+                continue
+            # Look at the immediately preceding sentence for a family member name
+            prev = parts[i - 1]
+            for fname in _FAMILY_NAMES:
+                if re.search(rf"\b{re.escape(fname)}\b", prev, re.IGNORECASE):
+                    parts[i] = re.sub(
+                        r"^You will be\b", f"{fname} will be", parts[i], count=1, flags=re.IGNORECASE
+                    )
+                    break
+        return " ".join(parts)
+
+    @staticmethod
+    def _strip_meta_commentary(text: str) -> str:
+        """Remove LLM meta-commentary sentences that reference the model's own context window.
+
+        Hermes3 appends phrases like "in this provided context" or "those should be
+        included in the facts" — boilerplate that leaks internal model framing into
+        executive-assistant responses.  Strip matching sentences as a post-processing
+        safety net (mirrors _sanitize_owner_address precedent).
+        """
+        _meta_patterns = [
+            r"[^\n.!?]*\bin this provided context\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bthose should be included in the facts\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bshould be included in the facts\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bIf additional details or pending tasks were needed\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bbased on the information provided\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bin the context given\b[^\n.!?]*[.!?]?",
+        ]
+        for pat in _meta_patterns:
+            text = re.sub(pat, "", text, flags=re.IGNORECASE)
+        # Collapse multiple blank lines left after stripping
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
         return text
 
     @classmethod
@@ -1904,6 +1977,13 @@ class PepperCore:
         _owner_first = (self.config.OWNER_NAME or "").split()[0]
         if _owner_first:
             response_text = self._sanitize_owner_address(response_text, _owner_first)
+
+        # Post-process: fix second-person over-application to family members' actions.
+        response_text = self._fix_family_travel_address(response_text)
+
+        # Post-process: strip LLM meta-commentary that leaks context-window framing
+        # into executive-assistant responses (e.g. "in this provided context").
+        response_text = self._strip_meta_commentary(response_text)
 
         # Add assistant response to working memory (skipped for isolated calls).
         if not isolated:
