@@ -18,11 +18,11 @@ Pepper is a sovereign, local-first AI life assistant. Think Iron Man's Pepper �
 agent/          # Pepper core orchestrator
 docs/           # Architecture, roadmap, principles
 subsystems/
-  people/       # Future: Corela integration (~/Developer/corela)
+  people/       # Future: relationship intelligence subsystem
   calendar/     # iCal/CalDAV reader
   communications/ # iMessage, email
   knowledge/    # Notes, documents, decisions
-  health/       # Apple Health
+  health/       # Health data (Apple Health, Oura Ring, Garmin, Whoop, etc.)
   finance/      # Financial data
 security/       # Adversarial and monitoring agents
 maintenance/    # Self-upgrade and health check agents
@@ -35,6 +35,7 @@ maintenance/    # Self-upgrade and health check agents
 - Roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)
 - Life Context: [docs/LIFE_CONTEXT.md](docs/LIFE_CONTEXT.md) — this is Pepper's ground truth about its owner
 - LLM Strategy: [docs/LLM_STRATEGY.md](docs/LLM_STRATEGY.md)
+- Agent Infrastructure: [docs/INFRA_GUIDELINES.md](docs/INFRA_GUIDELINES.md) — tool registry, memory pipeline, autonomy ladder, eval flywheel
 
 ## Development Guardrails (Harness Engineering)
 
@@ -106,13 +107,13 @@ Pepper follows **harness engineering** principles from OpenAI: the system around
 - Python 3.10+ for all backend services
 - Each subsystem exposes a standard MCP-compatible tool interface (future: standalone services)
 - Subsystems communicate via tool definitions only — never direct imports
-- PostgreSQL + pgvector as the persistence layer (same pattern as Corela)
+- PostgreSQL + pgvector as the persistence layer
 - Environment config via `.env` files, never hardcoded
 - All agents must handle graceful degradation when a subsystem is unavailable
 - Structured logging with `structlog` for observability
 
-## Relationship to Corela
+## Relationship to the People Subsystem
 
-Corela (`~/Developer/corela`) is a separate project and will eventually become the People subsystem. It is NOT a dependency of Pepper Phase 1. Pepper will drive Corela's evolution over time by surfacing what's needed based on actual usage — not the other way around.
+The People subsystem is intentionally deferred. It is NOT a dependency of Pepper Phase 1. Pepper should surface what relationship capabilities are actually needed through real usage before the implementation is expanded.
 
 ## No Co-Author Lines in Commits

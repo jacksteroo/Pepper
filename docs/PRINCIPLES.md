@@ -95,7 +95,7 @@ Every subsystem (People, Calendar, Communications, Knowledge, Health, Finance) i
 
 - Subsystems expose standard MCP-compatible tool interfaces
 - No direct imports between subsystems — all communication via local REST or MCP
-- Corela can be upgraded, replaced, or forked without touching Pepper core
+- The People subsystem can be upgraded, replaced, or forked without touching Pepper core
 - The interface layer (Telegram today, something else tomorrow) is similarly replaceable
 
 ---

@@ -4,20 +4,20 @@ Each subsystem is a focused data and tool service. Pepper Core calls them; they 
 
 ---
 
-## Subsystem 1: People (Corela)
+## Subsystem 1: People
 
-**Status**: Exists as separate project (`~/Developer/corela`). Integration is a future phase.  
+**Status**: Deferred future phase  
 **Directory**: `subsystems/people/` — currently a stub with interface spec only
 
 ### What it does
 
 Maintains the relationship graph: who's in your life, how they're connected, conversation history across platforms, relationship health signals, scoring, and semantic search over people and communications.
 
-### Why Corela is not Phase 1
+### Why the People subsystem is not Phase 1
 
-Corela is functional but the underlying relationship data hasn't been fully curated or polished. Pepper will identify what relationship data actually matters through usage, then drive Corela's evolution. Better to know what you need before building it.
+Relationship intelligence is useful, but the exact capabilities Pepper needs should be driven by real usage. Better to learn what matters from actual questions and workflows before expanding this layer.
 
-### What Pepper will eventually drive in Corela
+### What Pepper will eventually drive in the People subsystem
 
 - Populate contacts based on people mentioned in iMessage, email, calendar
 - Recommend relationship health improvements based on Pepper's broader life context
@@ -26,8 +26,10 @@ Corela is functional but the underlying relationship data hasn't been fully cura
 
 ### Integration interface (when ready)
 
+Tool names below are illustrative — the actual interface will be driven by what Pepper needs from real usage.
+
 ```text
-GET  /tools                          # 61 tools available
+GET  /tools                          # Available people tools
 POST /tools/get_contact_details      # Person profile
 POST /tools/get_outreach_recs        # Who to reach out to
 POST /tools/get_dormant_contacts     # Relationships going quiet
@@ -200,19 +202,22 @@ Pepper proposes decision log entries through conversation. You accept, edit, or 
 
 ### What it does
 
-Reads Apple Health data and gives Pepper awareness of your physical patterns and energy levels. Not medical — context for better life recommendations.
+Reads health data from multiple sources and gives Pepper awareness of your physical patterns and energy levels. Not medical — context for better life recommendations.
 
 ### Data sources
 
-- **Apple Health export**: Health app → Export All Health Data → XML
-- Full export can be large; process incrementally using `startDate` filtering
-- Categories: steps, sleep, heart rate, exercise, body metrics
+- **Apple Health export**: Health app → Export All Health Data → XML; process incrementally using `startDate` filtering
+- **Oura Ring**: sleep stages, HRV, readiness scores via local export or API
+- **Garmin**: activity, GPS, heart rate via Garmin Connect export
+- **Whoop**: strain, recovery, sleep via export
+- **Other wearables**: any device that exports CSV or JSON (Fitbit, Polar, etc.)
+- Categories across all sources: steps, sleep, heart rate, HRV, exercise, body metrics
 
 ### Privacy
 
-- Apple Health data never leaves the machine
-- Raw metrics stored locally; Pepper receives summaries
-- No integration with any health API — export-only
+- All health data stays on the machine — raw metrics are never transmitted
+- Raw metrics stored locally; Pepper receives summaries only
+- API access (e.g. Oura Ring API) is acceptable where the API key lives locally and data flows machine → source → machine; no health data is sent to third-party cloud services
 
 ### What Pepper does with this
 
@@ -281,4 +286,4 @@ Subsystems run as independent processes on localhost with different ports:
 - Knowledge: 8102
 - Health: 8103
 - Finance: 8104
-- People (Corela): 8001 (existing)
+- People: TBD
