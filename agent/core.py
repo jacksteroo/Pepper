@@ -801,10 +801,18 @@ class PepperCore:
             if _family_logistics_query:
                 kids_text = lc_sections.get("Kids — Activities and What Needs Attention", "")
                 if kids_text:
-                    kids_lines = [
+                    _past_deadline_re = re.compile(
+                        r'some\s+(?:January|February|March)\s+20\d\d\s+deadlines\s+were\s+imminent',
+                        re.IGNORECASE,
+                    )
+                    raw_kids_lines = [
                         ln.strip() for ln in kids_text.splitlines()
                         if ln.strip().startswith("-") or ln.strip().startswith("**")
                     ][:6]
+                    kids_lines = [
+                        _past_deadline_re.sub("deadline window has passed", ln)
+                        for ln in raw_kids_lines
+                    ]
                     if kids_lines:
                         sections.append(
                             "Upcoming family / kids items:\n" + "\n".join(kids_lines)
