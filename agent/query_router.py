@@ -137,6 +137,15 @@ _CROSS_SOURCE_TERMS = (
     "on my plate", "most important", "give me a brief", "quick brief",
     "what needs my", "what should i focus", "what should i prioritize",
     "what's most important", "what is most important",
+    # Proactive triage phrases from the scheduler / EA assistant workflow
+    "fall through the cracks", "most likely to fall",
+    "at risk of missing", "at risk of forgetting", "most at risk",
+    "what would you flag", "had to pick one thing", "if you had to interrupt",
+    "what open loops", "open loops have been", "sitting for more than",
+    "what should i be thinking about", "probably haven't",
+    "one thing i'd regret", "time-sensitive i need to act",
+    "what's coming up in the next", "what am i most at risk",
+    "what open loop", "blocking something else",
 )
 
 # Person-lookup regex patterns

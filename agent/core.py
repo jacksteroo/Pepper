@@ -1701,6 +1701,12 @@ class PepperCore:
             "harvard program", "harvard pre-college", "harvard pre",
             "program end", "ends when", "when does the harvard",
             "when does jack join", "when does jack meet",
+            # Pre-trip / pre-event checklist queries — triggers life context injection
+            "to do before", "need to do before", "what do i need to do",
+            "anything i need to do", "anything i should do before",
+            "before his trip", "before her trip", "before the trip",
+            "before matthew", "before my trip", "what needs to happen before",
+            "prepare for", "ready for the trip", "ready for the program",
             # Partner / spouse status queries
             "susan's career", "susan's situation", "susan's job", "susan's role",
             "partner's career", "wife's career", "career situation",
@@ -1715,22 +1721,62 @@ class PepperCore:
             _last_content = messages[-1]["content"].lower()
             if any(t in _last_content for t in _STATUS_QUERY_TERMS):
                 _lc_sections = get_life_context_sections(self.config.LIFE_CONTEXT_PATH)
-                _relevant_headings = (
-                    "Kids — Activities and What Needs Attention",
-                    "Children",
-                    "Travel Patterns",
-                    "Partner",
-                    "Active Challenges",
-                    "Open Loops Taking Up Mental Space",
+                # Narrow injected sections to the topic so unrelated life context
+                # doesn't dominate the response (especially for partner queries
+                # where injecting Kids/Travel sections causes topic contamination).
+                _PARTNER_QUERY_TERMS = (
+                    "susan", "partner", "wife", "career transition", "career change",
+                    "tipalti", "paypal", "spouse",
                 )
+                _CHILD_QUERY_TERMS = (
+                    "matthew", "connor", "dylan", "kids", "children", "sons",
+                    "pre-college", "harvard", "boston", "volleyball", "uber teen",
+                    "college tour", "aau",
+                )
+                if any(t in _last_content for t in _PARTNER_QUERY_TERMS):
+                    _relevant_headings = (
+                        "Partner",
+                        "Open Loops Taking Up Mental Space",
+                    )
+                elif any(t in _last_content for t in _CHILD_QUERY_TERMS):
+                    _relevant_headings = (
+                        "Kids — Activities and What Needs Attention",
+                        "Children",
+                        "Travel Patterns",
+                        "Active Challenges",
+                        "Open Loops Taking Up Mental Space",
+                    )
+                else:
+                    _relevant_headings = (
+                        "Kids — Activities and What Needs Attention",
+                        "Children",
+                        "Travel Patterns",
+                        "Partner",
+                        "Active Challenges",
+                        "Open Loops Taking Up Mental Space",
+                    )
                 _open_loop_note = (
                     "[NOTE: Every item listed in this section is UNRESOLVED — "
                     "NOT done, NOT sorted, NOT set up. Each requires action. "
                     "If asked 'is X sorted/done/confirmed?', answer NO.]\n"
                 )
+                _is_partner_query = any(t in _last_content for t in _PARTNER_QUERY_TERMS)
+
+                def _maybe_filter_open_loops(heading: str, content: str) -> str:
+                    """For partner queries, keep only Susan-related open loops to
+                    prevent unrelated items (e.g. Taiwan insurance) being misattributed
+                    to Susan during model generation."""
+                    if heading != "Open Loops Taking Up Mental Space" or not _is_partner_query:
+                        return content
+                    filtered = "\n".join(
+                        ln for ln in content.splitlines()
+                        if not ln.strip() or "susan" in ln.lower() or ln.strip().startswith("#")
+                    )
+                    return filtered if filtered.strip() else content
+
                 _section_blocks = [
                     (
-                        f"## {h}\n{_open_loop_note}{_lc_sections[h]}"
+                        f"## {h}\n{_open_loop_note}{_maybe_filter_open_loops(h, _lc_sections[h])}"
                         if h == "Open Loops Taking Up Mental Space"
                         else f"## {h}\n{_lc_sections[h]}"
                     )
