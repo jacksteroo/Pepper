@@ -433,6 +433,28 @@ class QueryRouter:
             self._log(user_message, d)
             return d
 
+        # ── 2b. Open-loop staleness queries — answer from life context, not inbox ─
+        # Queries like "which open loops have been sitting longest" are about the
+        # known life-context open loops, not inbox triage. Routing them to
+        # CROSS_SOURCE_TRIAGE sends irrelevant email/calendar noise. Route to
+        # ANSWER_FROM_CONTEXT so the LLM synthesizes from injected life context.
+        _OPEN_LOOP_STALENESS_TERMS = (
+            "sitting longest", "without progress", "longest without", "stale open",
+            "sitting for more than", "sitting for months", "no progress",
+            "been sitting", "without movement",
+        )
+        if contains_any(normalized, _OPEN_LOOP_STALENESS_TERMS):
+            d = RoutingDecision(
+                intent_type=IntentType.CROSS_SOURCE_TRIAGE,
+                target_sources=[],
+                action_mode=ActionMode.ANSWER_FROM_CONTEXT,
+                time_scope=time_scope,
+                entity_targets=entity_targets,
+                reasoning="open-loop staleness query — answer from life context",
+            )
+            self._log(user_message, d)
+            return d
+
         # ── 3. Cross-source triage ─────────────────────────────────────────────
         # Skip when entity_targets are present — person-lookup (rule 4) handles
         # "Any word from David?" better than triage handles it.

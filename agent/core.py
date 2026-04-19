@@ -661,6 +661,11 @@ class PepperCore:
         relevant_intents = {IntentType.INBOX_SUMMARY, IntentType.CROSS_SOURCE_TRIAGE}
         if not routings or any(r.intent_type not in relevant_intents for r in routings):
             return None
+        # When routing explicitly chose ANSWER_FROM_CONTEXT (e.g. open-loop staleness
+        # queries that need LLM synthesis from life context, not an inbox scan), skip
+        # the structured triage path so the LLM can answer from injected life context.
+        if all(r.action_mode == ActionMode.ANSWER_FROM_CONTEXT for r in routings):
+            return None
 
         sources: list[str] = []
         for routing in routings:
@@ -741,13 +746,19 @@ class PepperCore:
             )
 
         if "calendar" in sources:
-            cal_result = await execute_get_upcoming_events({"days": 7})
+            # For family-logistics queries that ask about "next 30 days" or "month",
+            # expand the calendar window so upcoming family events are visible.
+            _msg_lower_cal = user_message.lower()
+            _thirty_day_window = any(t in _msg_lower_cal for t in (
+                "30 days", "thirty days", "next month", "this month",
+            ))
+            cal_days = 30 if (_family_logistics_early and _thirty_day_window) else 7
+            cal_result = await execute_get_upcoming_events({"days": cal_days})
             if "error" in cal_result:
                 sections.append(f"Calendar: unavailable ({cal_result['error']})")
             elif cal_result.get("events"):
-                # For risk/slip queries, filter out routine recurring items so
-                # important time-sensitive events are visible.
-                _msg_lower_cal = user_message.lower()
+                # Filter out routine recurring items for risk/slip queries
+                # and for family-logistics queries where they add noise.
                 _risk_query = any(t in _msg_lower_cal for t in (
                     "fall through", "slip", "at risk", "forget", "miss",
                     "fall behind", "cracks", "overlooked", "drop",
@@ -755,8 +766,8 @@ class PepperCore:
                 _routine_patterns = (
                     "workout", "stretching", "bedtime", "links", "sleep", "wake up",
                 )
-                cal_events_raw = cal_result["events"][:10]
-                if _risk_query:
+                cal_events_raw = cal_result["events"][:20]
+                if _risk_query or _family_logistics_early:
                     cal_events_raw = [
                         e for e in cal_events_raw
                         if not any(
@@ -766,9 +777,12 @@ class PepperCore:
                     ]
                 cal_lines = [
                     f"- {e.splitlines()[0]}" if isinstance(e, str) else f"- {e}"
-                    for e in cal_events_raw[:6]
+                    for e in cal_events_raw[:8]
                 ]
-                sections.append("Calendar this week:\n" + "\n".join(cal_lines))
+                cal_heading = (
+                    "Calendar (next 30 days):" if cal_days == 30 else "Calendar this week:"
+                )
+                sections.append(cal_heading + "\n" + "\n".join(cal_lines))
 
         if not sections:
             return None
