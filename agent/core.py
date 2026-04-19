@@ -1760,7 +1760,9 @@ class PepperCore:
             "applied to", "which programs", "which schools", "which colleges",
             "which pre-college", "what programs", "what schools",
             "what did we apply", "what did i apply",
-            "summer programs", "pre-college programs", "waiting to hear back",
+            "summer programs", "summer program", "pre-college programs", "pre-college program",
+            "program deadline", "program deadlines", "deadlines coming up",
+            "deadlines are coming up", "what deadlines", "upcoming deadlines", "waiting to hear back",
             "still waiting to hear", "hear back from", "waiting on",
             "still waiting on", "pending decision", "pending decisions",
             "waiting for a decision", "application status", "application statuses",
@@ -1827,6 +1829,11 @@ class PepperCore:
                     "orlando", "four points", "sheraton",
                     "la trip", "los angeles trip", "east coast",
                 )
+                _FINANCE_QUERY_TERMS = (
+                    "crypto", "portfolio", "bitcoin", "ethereum", "investment",
+                    "invest", "401k", "401(k)", "financial", "finance", "money",
+                    "wealth", "savings", "stock", "market", "assets",
+                )
                 if any(t in _last_content for t in _PARTNER_QUERY_TERMS):
                     _relevant_headings = (
                         "Partner",
@@ -1839,6 +1846,13 @@ class PepperCore:
                         "Travel Patterns",
                         "Active Challenges",
                         "Open Loops Taking Up Mental Space",
+                    )
+                elif any(t in _last_content for t in _FINANCE_QUERY_TERMS):
+                    _relevant_headings = (
+                        "Financial and Property",
+                        "Active Challenges",
+                        "Open Loops Taking Up Mental Space",
+                        "What Jack Wants",
                     )
                 else:
                     _relevant_headings = (
@@ -2034,7 +2048,8 @@ class PepperCore:
                             + _status_preamble
                             + _conflict_preamble
                             + _injected
-                            + "\n\n[Question:]\n"
+                            + "\n\n[PRE-ANSWER CHECK: Before writing your response, scan the life context above for the exact words 'Brown', 'Princeton', 'Yale', 'Columbia', 'Stanford', 'MIT', 'Cornell', 'Penn', 'Dartmouth', 'Duke'. If any of these do NOT appear verbatim in the text above, you are FORBIDDEN from naming them. For program/deadline questions: only name schools and deadlines that appear word-for-word in the life context above. If no specific program names or deadlines are in the text above for this topic, say so and do not invent any. IMPORTANT: The phrase 'some March 2026 deadlines were imminent' in the life context is a GENERAL NOTE — it does NOT give a specific date or program name. Do NOT assign this phrase as a deadline for Harvard or any other named program. Harvard's application deadline is NOT stated in the life context; only its start date (June 22, 2026) is confirmed. Do NOT say Harvard's deadline is any specific date. FINANCE/CRYPTO RULE: If the question is about crypto, portfolio, or financial investments: the life context explicitly states Jack is 'Avoiding: Crypto portfolio attention'. This means Jack has intentionally deprioritized the crypto portfolio. Do NOT say 'it might be a good idea to keep an eye on it' or suggest taking action. Instead, confirm it is an acknowledged open loop that Jack has consciously deferred, and note that no specific action is required unless he decides to re-engage.]\n"
+                            + "\n[Question:]\n"
                             + messages[-1]["content"]
                         ),
                     }
