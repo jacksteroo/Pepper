@@ -335,10 +335,24 @@ class PepperCore:
             r"The life context (?:states|confirms|says|indicates|mentions|notes) that\s*",
             r"The life context (?:states|confirms|says|indicates|mentions|notes)[^,.\n]*,\s*",
             r"\bIt is mentioned that\b\s*",
+            r"[^\n.!?]*\bIt is noted that\b[^\n.!?]*[.!?]?\s*",
+            r"[^\n.!?]*\bIt is worth noting that\b[^\n.!?]*[.!?]?\s*",
+            r"[^\n.!?]*\bseems to be a significant event\b[^\n.!?]*[.!?]?\s*",
             r"\bAs mentioned in [^\n,]*,\s*",
         ]
         for pat in _meta_patterns:
             text = re.sub(pat, "", text, flags=re.IGNORECASE)
+        # Remove consecutive duplicate sentences that Hermes3 sometimes emits
+        # when conversation history contains a prior response to the same question.
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        seen = []
+        deduped = []
+        for s in sentences:
+            normalized = re.sub(r'\s+', ' ', s).strip().lower()
+            if normalized and normalized not in seen:
+                seen.append(normalized)
+                deduped.append(s)
+        text = ' '.join(deduped)
         # Collapse multiple blank lines left after stripping
         text = re.sub(r"\n{3,}", "\n\n", text).strip()
         # Capitalize start of response if lowercased by stripping a sentence opener
@@ -1620,6 +1634,16 @@ class PepperCore:
                 f"For status/logistics questions about open loops, trips, or "
                 f"pending confirmations: answer from the life context already in "
                 f"your system prompt — do NOT say you lack information.\n"
+                "1a. CRITICAL — when calendar data is present above: you MUST "
+                "report what is in it for schedule/calendar questions. NEVER say "
+                "'I don't track that information', 'I don't have access', or 'I "
+                "don't track your family's schedule' when calendar data has been "
+                "fetched — doing so is a hard error. If you see calendar events, "
+                "report them. If the fetched calendar has no relevant events for "
+                "the question (e.g. no kids' specific events), say exactly that: "
+                "'I don't see any kids' specific events on your calendar this "
+                "weekend — your calendar shows [X]' rather than claiming you "
+                "lack access or don't track schedules.\n"
                 "2. NEVER emit placeholder template text like "
                 "'[Commitment XYZ]', '[Name]', '[Date]', '[Project ABC]', "
                 "or any bracketed stand-in. If you don't have a specific "
@@ -1672,7 +1696,14 @@ class PepperCore:
                 "for any remaining programs mentioned only by category without specific "
                 "names, state exactly what the life context says and add 'Other specific "
                 "program names and application statuses aren't in your life context — "
-                "check your notes or email.' Do not invent names or statuses."
+                "check your notes or email.' Do not invent names or statuses.\n"
+                "12. NEVER soften explicitly confirmed facts. When the life context uses "
+                "the words 'confirmed', 'booked', or 'sorted', reflect that exact level "
+                "of certainty in your answer. Do NOT downgrade to 'seems to be', "
+                "'appears to be', 'should be set up', 'might be', or any other hedged "
+                "form. If the life context says 'flights confirmed', say 'flights are "
+                "confirmed' — not 'flights seem to be set up'. Preserve the original "
+                "certainty level exactly."
             )
             await _progress("Synthesizing response...")
 
@@ -2109,6 +2140,43 @@ class PepperCore:
                     }
                     chat_logger.debug(
                         "meal_context_injected",
+                        message_preview=user_message[:80],
+                    )
+
+        # Calendar-grounding injection: when query is about schedule/events AND
+        # calendar data was fetched, inject a directive so the model reads it.
+        _CALENDAR_SCHEDULE_TERMS = (
+            "this weekend", "this week", "today", "tomorrow",
+            "what's on", "what is on", "what do i have", "what does",
+            "kids schedule", "kids' schedule", "their schedule",
+            "what's coming up", "what is coming up", "coming up this",
+            "schedule this", "schedule for",
+        )
+        if (
+            calendar_context
+            and messages
+            and messages[-1].get("role") == "user"
+            and not any(t in _last_content for t in _STATUS_QUERY_TERMS)
+        ):
+            if any(t in _last_content for t in _CALENDAR_SCHEDULE_TERMS):
+                _existing_content = messages[-1]["content"]
+                if "[CALENDAR DATA]" not in _existing_content and "[Life context facts" not in _existing_content:
+                    messages[-1] = {
+                        "role": "user",
+                        "content": (
+                            "[CALENDAR DATA has been fetched and appears in your system context above. "
+                            "Answer from ONLY what is listed there — NEVER invent events, dates, or "
+                            "activities not present verbatim in the fetched data. Do NOT cite past or "
+                            "hypothetical events. If no kids-specific events are in the fetched data, "
+                            "say: 'I don't see any specific events for the kids on your calendar this "
+                            "weekend.' Then briefly list 1-2 actual events from the fetched data for "
+                            "this weekend (quote event names and times exactly as they appear). "
+                            "NEVER say 'I don't track that information' — you have calendar data above.]\n\n"
+                            + _existing_content
+                        ),
+                    }
+                    chat_logger.debug(
+                        "calendar_grounding_injected",
                         message_preview=user_message[:80],
                     )
 
