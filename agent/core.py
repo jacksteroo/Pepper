@@ -331,6 +331,8 @@ class PepperCore:
             r"As per [^,.\n]*information[^,.\n]*,\s*",
             r"According to [^,.\n]*life context[^,.\n]*,\s*",
             r"Based on [^,.\n]*life context[^,.\n]*,\s*",
+            r"The life context (?:states|confirms|says|indicates|mentions|notes) that\s*",
+            r"The life context (?:states|confirms|says|indicates|mentions|notes)[^,.\n]*,\s*",
             r"\bIt is mentioned that\b\s*",
             r"\bAs mentioned in [^\n,]*,\s*",
         ]
