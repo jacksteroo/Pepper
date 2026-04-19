@@ -1761,6 +1761,20 @@ class PepperCore:
             "partner's career", "wife's career", "career situation",
             "career transition", "career change", "starting at paypal",
             "tipalti", "paypal", "susan starting", "susan's transition",
+            # Travel / lodging / hotel queries
+            "what hotel", "which hotel", "what's the hotel", "what is the hotel",
+            "where are we staying", "where am i staying", "where are they staying",
+            "where is the hotel", "what's our hotel", "what is our hotel",
+            "what lodging", "which lodging", "lodging for the",
+            "check-in time", "check in time", "check-out time", "checkout time",
+            "what flight", "which flight", "what's the flight", "what is the flight",
+            "when do we fly", "when does the flight", "what's the rental", "rental car for",
+            "ground transport", "getting there", "how are we getting",
+            "what are the travel", "travel plans for", "trip details",
+            "confirmed for the trip", "booked for the trip",
+            "orlando trip", "la trip", "boston trip", "east coast trip",
+            "malaysia trip", "japan trip", "volleyball trip", "aau trip",
+            "what's booked", "what is booked", "what's confirmed", "what is confirmed",
         )
         if (
             routing.action_mode in (ActionMode.ANSWER_FROM_CONTEXT, ActionMode.CALL_TOOLS)
@@ -1782,6 +1796,8 @@ class PepperCore:
                     "pre-college", "harvard", "boston", "volleyball", "uber teen",
                     "college tour", "aau", "child", "son", "my kid",
                     "summer programs", "summer program",
+                    "orlando", "four points", "sheraton",
+                    "la trip", "los angeles trip", "east coast",
                 )
                 if any(t in _last_content for t in _PARTNER_QUERY_TERMS):
                     _relevant_headings = (

@@ -55,8 +55,6 @@ SLACK_QUERY_TERMS = (
     "workspace",
     "work chat",
     "team chat",
-    "deadline",
-    "deadlines",
     "due friday",
     "due monday",
     "by eod",
