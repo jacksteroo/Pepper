@@ -339,6 +339,9 @@ class PepperCore:
             r"[^\n.!?]*\bIt is worth noting that\b[^\n.!?]*[.!?]?\s*",
             r"[^\n.!?]*\bseems to be a significant event\b[^\n.!?]*[.!?]?\s*",
             r"\bAs mentioned in [^\n,]*,\s*",
+            r"[^\n.!?]*\bin your life context\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bin the life context\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bfrom the life context\b[^\n.!?]*[.!?]?",
         ]
         for pat in _meta_patterns:
             text = re.sub(pat, "", text, flags=re.IGNORECASE)
@@ -1844,6 +1847,11 @@ class PepperCore:
             "orlando trip", "la trip", "boston trip", "east coast trip",
             "malaysia trip", "japan trip", "volleyball trip", "aau trip",
             "what's booked", "what is booked", "what's confirmed", "what is confirmed",
+            # College tour / campus visit queries
+            "college tour", "campus tour", "campus visit", "campus visits",
+            "east coast college", "east coast tour", "college campus",
+            "what is the plan for", "what's the plan for",
+            "when does the tour", "where are we going for",
         )
         if (
             routing.action_mode in (ActionMode.ANSWER_FROM_CONTEXT, ActionMode.CALL_TOOLS)
