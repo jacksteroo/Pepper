@@ -238,6 +238,7 @@ class PepperCore:
         # Optional adverb slot between name/pronoun and verb ("Jack still needs to").
         _adv = r"(?:\s+\w+)?"
         _owner_patterns = (
+            (rf"\bfor\s+{name}\s+to\b", "for you to"),
             (rf"\b{name}{_adv}\s+needs?\s+to\b", "You need to"),
             (rf"\b{name}{_adv}\s+needs?\b", "You need"),
             (rf"\b{name}{_adv}\s+should\b", "You should"),
@@ -2249,6 +2250,16 @@ class PepperCore:
             response_text,
             flags=_re_post.DOTALL,
         ).strip()
+
+        # Post-process: truncate at [Post-Generated Text] or similar Hermes3
+        # meta-labels that introduce verbose self-commentary after the real answer.
+        _post_gen_match = _re_post.search(
+            r"\n*\[Post-Generated\b[^\]]*\]",
+            response_text,
+            flags=_re_post.IGNORECASE,
+        )
+        if _post_gen_match:
+            response_text = response_text[: _post_gen_match.start()].strip()
 
         # Add assistant response to working memory (skipped for isolated calls).
         if not isolated:
