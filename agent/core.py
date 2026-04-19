@@ -356,6 +356,12 @@ class PepperCore:
             r"[^\n.!?]*\bit seems that\b[^\n.!?]*[.!?]?",
             r"[^\n.!?]*\bIt appears that\b[^\n.!?]*[.!?]?",
             r"[^\n.!?]*\bit appears that\b[^\n.!?]*[.!?]?",
+            # Strip chatbot-style closing questions / filler offers
+            r"[^\n.!?]*\bDo you need any (?:other|additional|more|further)\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bIs there anything else\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bLet me know if you (?:need|have|want)\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bFeel free to ask\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bHope that helps\b[^\n.!?]*[.!?]?",
         ]
         for pat in _meta_patterns:
             text = re.sub(pat, "", text, flags=re.IGNORECASE)
@@ -799,6 +805,9 @@ class PepperCore:
                 # For family-logistics queries, also filter blocking/work-meeting noise.
                 _work_patterns = (
                     "unavailable", "all hands", "eng all hands",
+                    "validators", "operational review", "kysen:", "kysenpool",
+                    "weekly check-in", "weekly sync", "out of office",
+                    "jack /",
                 ) if _family_logistics_early else ()
                 cal_events_raw = cal_result["events"][:20]
                 if _risk_query or _family_logistics_early:
