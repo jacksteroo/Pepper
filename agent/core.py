@@ -2373,8 +2373,13 @@ class PepperCore:
                             + "\nCRITICAL: You MUST accept the ALREADY CONFIRMED/DONE list above as fact. "
                             "If something is listed as CONFIRMED/DONE, you are FORBIDDEN from saying it "
                             "is unconfirmed, still needed, or not yet booked. Stating otherwise is factually wrong. "
-                            "STILL NEEDS ACTION items are the only open items — if that list is empty, "
-                            "report that all logistics for this trip are confirmed. "
+                            "STILL NEEDS ACTION items are the only open items — if that list is absent or empty, "
+                            "it means NOTHING is left to sort for this trip: answer 'All logistics for this trip "
+                            "are confirmed' and list only the confirmed items. "
+                            "CRITICAL: Do NOT search other sections of the life context (pre-college programs, "
+                            "career transitions, college planning, crypto, etc.) for open items when the question "
+                            "is about a specific named trip. Open items from other domains are NOT open items for "
+                            "this trip. If no STILL NEEDS ACTION items appear above, the trip is fully sorted. "
                             "CRITICAL: These facts come from the owner's current life context document and "
                             "OVERRIDE any older or conflicting memory entries. If memory says something is "
                             "still needed but this block says it is confirmed, trust this block — the memory "
@@ -2430,6 +2435,10 @@ class PepperCore:
                             "future date (e.g. 'confirmed to start with PayPal on May 18 2026'), they have NOT "
                             "yet changed jobs — they are ABOUT TO start. Use future tense: 'Susan is confirmed "
                             "to start at PayPal on May 18, 2026' not 'recently changed jobs'. "
+                            "FORBIDDEN PHRASES about Susan's job: do NOT say 'recently transitioned from Tipalti', "
+                            "'recently left Tipalti', 'moved from Tipalti', 'left Tipalti', 'no longer at Tipalti', "
+                            "or any past-tense phrase implying she has already departed. She is still at Tipalti "
+                            "and will leave when she starts at PayPal on May 18, 2026. "
                             "CRITICAL: In 'startup at Tipalti' — 'startup' describes Tipalti (it is a startup "
                             "company), NOT that Susan recently started working there. Tipalti is her CURRENT "
                             "employer. She is LEAVING Tipalti for PayPal. Do not say she recently started Tipalti. "
@@ -2562,7 +2571,8 @@ class PepperCore:
         tool_calls: list = []  # populated below; kept in scope for the skill reviewer
         try:
             chat_logger.info("llm_dispatch", model=model, n_messages=len(messages), tool_count=len(tools))
-            result = await self.llm.chat(messages, tools=tools or None, model=model)
+            _ollama_opts = {"num_ctx": self.config.MODEL_CONTEXT_TOKENS} if model.startswith("local/") else None
+            result = await self.llm.chat(messages, tools=tools or None, model=model, options=_ollama_opts)
             response_text = result.get("content", "")
             tool_calls = result.get("tool_calls", [])
             chat_logger.info(
@@ -2588,7 +2598,7 @@ class PepperCore:
                 try:
                     chat_logger.info("llm_retry_after_overflow_start", model=model)
                     messages = await self._compressor.compress(messages)
-                    result = await self.llm.chat(messages, tools=tools or None, model=model)
+                    result = await self.llm.chat(messages, tools=tools or None, model=model, options=_ollama_opts)
                     response_text = result.get("content", "")
                     tool_calls = result.get("tool_calls", [])
                     chat_logger.info(

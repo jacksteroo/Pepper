@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # Effective context window for the local model in tokens.  Compression
     # triggers at 80% of this value.  hermes3 (LLaMA 3.1) supports up to 128K
     # but Ollama's default num_ctx is 2048–8192; set conservatively.
-    MODEL_CONTEXT_TOKENS: int = 8192
+    MODEL_CONTEXT_TOKENS: int = 16384
 
     # System
     LOG_LEVEL: str = "INFO"
