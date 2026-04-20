@@ -379,6 +379,18 @@ class PepperCore:
             r"[^\n.!?]*\bUse this summary to answer directly\b[^\n.!?]*[.!?]?",
             r"[^\n.!?]*\bDo NOT reproduce or reference this\b[^\n.!?]*[.!?]?",
             r"\[PRE-COMPUTED STATUS[^\]]*\]",
+            # Strip sentences referencing "current life context document" or "given context"
+            r"[^\n.!?]*\bIn your current life context document\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\byour current life context document\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bwithin the given context\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bcan be found within\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bno (?:specific |concrete )?(?:deadline|date|program|information)\b[^\n.!?]*\bcan be found\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bThe life context only provides\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bThe context does mention\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bin the given life context\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bwere provided in the\b[^\n.!?]*\bcontext\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bno (?:specific |further |additional )?details? (?:about|regarding|on)\b[^\n.!?]*\b(?:were|are) (?:provided|mentioned|listed|given)\b[^\n.!?]*[.!?]?",
+            r"Other than (?:this|that),?\s*no (?:specific|further|additional)?\s*(?:details?|information)\b[^\n.!?]*[.!?]?",
         ]
         for pat in _meta_patterns:
             text = re.sub(pat, "", text, flags=re.IGNORECASE)
@@ -386,8 +398,13 @@ class PepperCore:
         # direct imperative equivalents so the response sounds like an EA, not a report.
         _impersonal_replacements = [
             (r"[Ii]t is (?:advised|recommended|suggested) to plan accordingly", "Plan accordingly"),
+            (r"[Ii]t would be (?:advisable|wise|prudent) to plan accordingly", "Plan accordingly"),
             (r"[Ii]t is (?:advised|recommended|suggested) to", ""),
+            (r"[Ii]t would be (?:advisable|wise|prudent) to", ""),
             (r"\band it is (?:advised|recommended|suggested) to\b", "and"),
+            (r"\bso it would be (?:advisable|wise|prudent) to\b", "—"),
+            (r"[Ii]t'?s recommended to check directly with", "Check directly with"),
+            (r"[Ii]t'?s (?:advised|recommended|suggested) to check", "Check"),
         ]
         for pat, repl in _impersonal_replacements:
             text = re.sub(pat, repl, text, flags=re.IGNORECASE)
