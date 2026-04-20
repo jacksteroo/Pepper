@@ -893,7 +893,11 @@ class PepperCore:
                 # For family-logistics queries, exclude purely financial/non-family open
                 # loops so the response stays focused on household and family items.
                 if _family_logistics_early:
-                    _non_family_kw = ("crypto", "portfolio", "bitcoin", "ethereum")
+                    _non_family_kw = (
+                        "crypto", "portfolio", "bitcoin", "ethereum",
+                        "taiwan-malaysia", "taiwan", "zhunpin", "accidental death",
+                        "cross-border fund", "poa /", "sze yin",
+                    )
                     loop_lines = [
                         ln for ln in loop_lines
                         if not any(kw in ln.lower() for kw in _non_family_kw)
