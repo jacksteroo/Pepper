@@ -61,6 +61,9 @@ _NOISE_SUBJECT_TERMS = (
     "limited time", "last chance", "black friday",
     "discover ", "smarter ways", "ways to use",  # feature-promo marketing patterns
     "started a conversation",  # community notification platforms (Nextdoor, etc.)
+    "don't miss", "don't miss out", "miss out on",  # FOMO marketing subject lines
+    "top courses", "top business", "business courses",  # promotional course marketing
+    "special offer", "exclusive offer", "exclusive deal",  # generic promo patterns
 )
 
 
