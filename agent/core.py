@@ -1934,8 +1934,13 @@ class PepperCore:
                 "especially 'Kids — Activities and What Needs Attention', "
                 "'Open Loops Taking Up Mental Space', and 'Active Challenges'. "
                 "Trip logistics (flights, lodging, transport) appear in the Activities "
-                "section — read that section carefully before concluding anything is "
-                "unconfirmed. Do NOT call get_upcoming_events, "
+                "section — for EACH logistics component, check whether the life context "
+                "EXPLICITLY states it is confirmed, booked, or sorted. Only say a "
+                "component is confirmed if the life context uses those exact words for "
+                "it. If the life context mentions a component (e.g. a flight date, a "
+                "meeting point, accommodation) WITHOUT explicitly saying 'confirmed', "
+                "'booked', or 'sorted' for that item, list it as 'not yet confirmed — "
+                "open item'. Do NOT call get_upcoming_events, "
                 "get_calendar_events_range, get_driving_time, or any other tool "
                 "for these questions — the answer is in your life context. "
                 "IMPORTANT SCOPING RULE: When the question names a specific trip, "
@@ -2455,6 +2460,49 @@ class PepperCore:
                                 ln for ln in _topic_pending
                                 if not any(ot in ln.lower() for ot in _other_trip_terms)
                             ]
+                    # For "what is left to confirm" queries about a named trip,
+                    # surface logistics components that are mentioned but not
+                    # explicitly confirmed/booked — even if the broader line
+                    # was classified as confirmed for other reasons (e.g. program
+                    # enrollment confirmed, but flight within same bullet unconfirmed).
+                    _left_to_confirm_query = any(
+                        t in _last_content
+                        for t in ("left to confirm", "what is left", "what's left",
+                                  "still needs", "still to confirm", "still need to",
+                                  "left to book", "what needs to be confirmed",
+                                  "what needs to be done", "still pending",
+                                  "not yet booked", "not yet confirmed")
+                    )
+                    if _left_to_confirm_query and _query_trip_terms:
+                        # Check ALL topic lines (confirmed or not) for logistics
+                        # components mentioned without an explicit confirmation phrase.
+                        # This catches "Flying from LAX on June 22" which is mentioned
+                        # but not marked as booked/confirmed unlike Orlando's
+                        # "Flights and ground transport confirmed."
+                        _logistics_markers = ("flight", "flying", "fly from", "lodging",
+                                              "hotel", "transport", "housing", "accommodation",
+                                              "rental", "driving", "ground transport",
+                                              "return flight", "airfare")
+                        _explicit_confirmation_phrases = (
+                            "flights confirmed", "flights and ground transport confirmed",
+                            "lodging booked", "flight confirmed", "transport confirmed",
+                            "hotel booked", "flights booked", "rental confirmed",
+                        )
+                        for _tln in _topic_lines:
+                            _tln_lower = _tln.lower()
+                            if not any(m in _tln_lower for m in _logistics_markers):
+                                continue
+                            # This line mentions a logistics component.
+                            # If it has no explicit confirmation phrase for that
+                            # logistics item, and it isn't already in _topic_pending,
+                            # surface it as an open item.
+                            if not any(p in _tln_lower for p in _explicit_confirmation_phrases):
+                                _pending_entry = (
+                                    f"Flight/transport mentioned but not explicitly confirmed as booked: {_tln.strip()}"
+                                )
+                                if _pending_entry not in _topic_pending:
+                                    _topic_pending.append(_pending_entry)
+
                     if _topic_confirmed or _topic_pending:
                         _status_lines = []
                         if _topic_confirmed:
