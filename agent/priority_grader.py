@@ -52,6 +52,8 @@ _NOISE_SENDER_PATTERNS = (
     "marketing@", "promo@", "digest@", "updates@", "support+",
     "@mail.",   # marketing bulk-email subdomains: team@mail.product.com
     "@email.",  # marketing bulk-email subdomains: info@email.product.com
+    "@lists.",  # mailing list servers (e.g. @lists.sync.global)
+    "zendesk.com",  # support ticket platforms — automated notifications
     "@ebay.com", "@nextdoor.com", "@amazon.com", "@paypal.com",
 )
 _NOISE_SUBJECT_TERMS = (
@@ -64,6 +66,8 @@ _NOISE_SUBJECT_TERMS = (
     "don't miss", "don't miss out", "miss out on",  # FOMO marketing subject lines
     "top courses", "top business", "business courses",  # promotional course marketing
     "special offer", "exclusive offer", "exclusive deal",  # generic promo patterns
+    "tokenomics",  # blockchain tokenomics announcements from mailing lists
+    "content violation",  # automated moderation notifications
 )
 
 
