@@ -260,6 +260,10 @@ class PepperCore:
             (rf"\b{name}\s+and\b", "you and"),
             # Catch-all: any remaining standalone owner name → "you"
             (rf"\b{name}\b", "you"),
+            # Fix couple third-person references ("their shared X" → "your shared X")
+            # These appear in Susan-related sentences where _pronoun_patterns are skipped.
+            (r"\btheir shared\b", "your shared"),
+            (r"\bwithin their\b", "within your"),
         )
         # Pronoun patterns applied only in segments without family member names.
         _pronoun_patterns = (
@@ -284,16 +288,32 @@ class PepperCore:
 
         # Apply pronoun patterns sentence by sentence; skip when a family member
         # name appears in the same sentence to avoid rewriting their pronouns.
-        sentences = re.split(r"(?<=[.!?])\s+", text)
-        out: list[str] = []
-        for sent in sentences:
-            if any(fname in sent for fname in _FAMILY_NAMES):
-                out.append(sent)
+        # Use a capturing-group split so the original separators (spaces OR
+        # newlines) are preserved in the re-joined output rather than collapsed
+        # to a single space, which would destroy list-item newlines.
+        parts = re.split(r"((?<=[.!?])\s+)", text)
+        out_parts: list[str] = []
+        for idx, part in enumerate(parts):
+            if idx % 2 == 1:
+                # Odd indices are separators captured by the group — keep as-is.
+                out_parts.append(part)
             else:
-                for pat, repl in _pronoun_patterns:
-                    sent = re.sub(pat, repl, sent)
-                out.append(sent)
-        return " ".join(out)
+                sent = part
+                if any(fname in sent for fname in _FAMILY_NAMES):
+                    out_parts.append(sent)
+                else:
+                    for pat, repl in _pronoun_patterns:
+                        sent = re.sub(pat, repl, sent)
+                    out_parts.append(sent)
+        text = "".join(out_parts)
+
+        # Lowercase mid-sentence "You" — owner-pattern replacements always emit
+        # "You" (capital) but that's wrong when the substitution lands mid-sentence.
+        # Match "You" preceded by a lowercase letter or punctuation (comma, semicolon,
+        # colon) + space, which reliably identifies a mid-sentence position.
+        text = re.sub(r"(?<=[a-z,;:] )\bYou\b", "you", text)
+
+        return text
 
     @staticmethod
     def _fix_family_travel_address(text: str) -> str:
@@ -370,7 +390,22 @@ class PepperCore:
             r"[^\n.!?]*\bby being present\b[^\n.!?]*[.!?]?",
             r"[^\n.!?]*\byou can help \w+ feel more at ease\b[^\n.!?]*[.!?]?",
             r"[^\n.!?]*\bRemember,? (?:even|the most important|that)\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bRemember,?\s+\w+ has (?:successfully|already|previously)\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bcan go a long way\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\boffering your (?:encouragement|support|help) now\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bthis new chapter\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bsuccessfully navigated (?:career|life|work|job|the)\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bit may be helpful to (?:review|discuss|schedule|plan)\b[^\n.!?]*[.!?]?",
             r"[^\n.!?]*\ba little goes a long way\b[^\n.!?]*[.!?]?",
+            # Strip ungrounded household-task redistribution advice on career/schedule change queries
+            r"[^\n.!?]*\bdiscuss potential changes to your shared schedule\b[^\n.!?]*[.!?]?",
+            # Strip generic "these unresolved items each require..." summary padding
+            r"[^\n.!?]*\bThese unresolved items\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\beach require further attention or action\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bThis conversation should include considering\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bshared household responsibilities\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\btasks like cooking(?:,| and) cleaning\b[^\n.!?]*[.!?]?",
+            r"[^\n.!?]*\bhow (?:tasks|responsibilities|chores) (?:like|such as|including)\b[^\n.!?]*[.!?]?",
             # Strip generic "significant adjustment for anyone/people" padding
             r",?\s*which can be a significant adjustment for (?:anyone|people|most)[^.!?]*[.!?]?",
             r",?\s*as (?:this|it) can be (?:a )?(?:significant|major|big) (?:adjustment|change) for (?:anyone|most)[^.!?]*[.!?]?",
@@ -423,15 +458,26 @@ class PepperCore:
             text = re.sub(pat, repl, text, flags=re.IGNORECASE)
         # Remove consecutive duplicate sentences that Hermes3 sometimes emits
         # when conversation history contains a prior response to the same question.
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        seen = []
-        deduped = []
-        for s in sentences:
-            normalized = re.sub(r'\s+', ' ', s).strip().lower()
-            if normalized and normalized not in seen:
-                seen.append(normalized)
-                deduped.append(s)
-        text = ' '.join(deduped)
+        # Use a capturing-group split so separators (spaces, newlines) are preserved
+        # in the re-joined output instead of being collapsed to a single space.
+        _dedup_parts = re.split(r'((?<=[.!?])\s+)', text)
+        seen: list[str] = []
+        result_parts: list[str] = []
+        for _di, _dp in enumerate(_dedup_parts):
+            if _di % 2 == 1:
+                # Separator: only include if the PRECEDING sentence was kept.
+                if result_parts and result_parts[-1] != "":
+                    result_parts.append(_dp)
+            else:
+                normalized = re.sub(r'\s+', ' ', _dp).strip().lower()
+                if normalized and normalized not in seen:
+                    seen.append(normalized)
+                    result_parts.append(_dp)
+                else:
+                    # Drop this sentence and retroactively drop the preceding separator.
+                    if result_parts and _di > 0:
+                        result_parts.pop()
+        text = ''.join(result_parts)
         # Collapse multiple blank lines left after stripping
         text = re.sub(r"\n{3,}", "\n\n", text).strip()
         # Capitalize start of response if lowercased by stripping a sentence opener
@@ -861,12 +907,15 @@ class PepperCore:
                     "groceries", "errand",
                 ) if (_family_logistics_early and _most_important_query) else ()
                 _work_patterns = (
-                    "unavailable", "all hands", "eng all hands",
+                    "unavailable", "all hands", "all-hands", "eng all hands",
                     "validators", "operational review", "kysen:", "kysenpool",
                     "weekly check-in", "weekly sync", "out of office",
                     "jack /",
                     "badminton", "pickleball", "golf", "chess",
                     " sync", "standup", "stand-up", "1:1", "office hours",
+                    "bi-weekly", "biweekly",
+                    "story <>", "story delegation", "story all-hands",
+                    "delegation and future",
                     *_errand_patterns,
                 ) if _family_logistics_early else ()
                 cal_events_raw = cal_result["events"][:20]
@@ -1660,6 +1709,7 @@ class PepperCore:
                 _rs_owner_first = (self.config.OWNER_NAME or "").split()[0]
                 if _rs_owner_first:
                     routed_summary = self._sanitize_owner_address(routed_summary, _rs_owner_first)
+                routed_summary = self._strip_meta_commentary(routed_summary)
                 if not isolated:
                     self.memory.add_to_working_memory("assistant", routed_summary)
                 chat_logger.info("chat_out", text=routed_summary[:1000])
@@ -1888,11 +1938,17 @@ class PepperCore:
                 "unconfirmed. Do NOT call get_upcoming_events, "
                 "get_calendar_events_range, get_driving_time, or any other tool "
                 "for these questions — the answer is in your life context. "
-                "IMPORTANT SCOPING RULE: When the question names a specific trip or "
-                "event (e.g. 'Orlando', 'Boston', 'volleyball'), ONLY surface items "
-                "that are directly related to that specific trip. Do NOT pull in open "
-                "loops or notes about unrelated programs or events that happen to "
-                "appear near the relevant trip in the life context.\n"
+                "IMPORTANT SCOPING RULE: When the question names a specific trip, "
+                "event, or named program (e.g. 'Orlando', 'Boston', 'volleyball', "
+                "'Harvard program', 'Harvard pre-college'), ONLY surface items "
+                "directly related to that specific trip or program. Do NOT pull in "
+                "open loops or notes about unrelated programs or events that happen "
+                "to appear near the relevant item in the life context. If a named "
+                "program (e.g. 'Matthew's Harvard program') is confirmed in the life "
+                "context, state that confirmation first, then list only specific "
+                "pending logistics for that program — do NOT surface the general "
+                "'confirm application status' note for other programs as if it "
+                "applies to the named confirmed program.\n"
                 "10. Items listed in 'Open Loops Taking Up Mental Space' or "
                 "'Active Challenges' are explicitly NOT resolved. If asked "
                 "'is X sorted/done/confirmed?' and X appears as an open loop, "
@@ -1920,7 +1976,14 @@ class PepperCore:
                 "with the appropriate second-person pronoun. "
                 "If a specific status (lodging, flights, transport) is NOT mentioned "
                 "in the life context, state it plainly as 'not yet confirmed — open item' "
-                "rather than suggesting the owner ask or follow up with anyone."
+                "rather than suggesting the owner ask or follow up with anyone.\n"
+                "14. For questions about Susan's career or career transition: report "
+                "confirmed facts only — her confirmed start date, company, and any "
+                "life-context-stated household implications. Do NOT invent household "
+                "task redistribution advice (cooking, cleaning, driving kids, shared "
+                "schedule discussions) unless explicitly grounded in the life context. "
+                "Do NOT give generic relationship encouragement or motivational support "
+                "sentences. Stick to what is known and actionable."
             )
             await _progress("Synthesizing response...")
 
