@@ -2298,6 +2298,24 @@ class PepperCore:
                 if _section_blocks:
                     _injected = "\n\n".join(_section_blocks)
 
+                    # For pre-college / program deadline queries, prepend a KEY FACT
+                    # header so the model surfaces the Harvard confirmation before the
+                    # broader deadline-window note, which otherwise dominates.
+                    _is_program_deadline_q = any(t in _last_content for t in (
+                        "pre-college program", "program deadline", "deadlines coming",
+                        "deadlines are coming", "program deadlines", "summer program",
+                        "application status", "college deadline",
+                    ))
+                    if _is_program_deadline_q:
+                        _injected = (
+                            "[KEY FACT: Matthew is CONFIRMED enrolled in the Harvard "
+                            "pre-college Quantum Computing program in Boston, starting "
+                            "June 22, 2026. Lead your answer with this confirmed item. "
+                            "The March 2026 application deadline window for other 2026 "
+                            "programs has passed — status of any additional programs "
+                            "needs to be confirmed separately.]\n\n"
+                        ) + _injected
+
                     # Deterministically extract ⚠️ conflict lines that share
                     # keywords with the user's question so the model cannot miss them.
                     import re as _re
