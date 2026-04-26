@@ -22,12 +22,12 @@ class Settings(BaseSettings):
 
     # LLM — Ollama
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    DEFAULT_LOCAL_MODEL: str = "hermes3:latest"
+    DEFAULT_LOCAL_MODEL: str = "hermes-4.3-36b-tools:latest"
     # DEFAULT_FRONTIER_MODEL: intentionally defaults to local model so the system runs
     # fully offline without an ANTHROPIC_API_KEY. Set to "claude-sonnet-4-6" in .env
     # to enable frontier reasoning for high-stakes tasks (family decisions, drafts, etc.)
     # Raw personal data (messages, email bodies) is NEVER sent to frontier regardless.
-    DEFAULT_FRONTIER_MODEL: str = "local/hermes3:latest"
+    DEFAULT_FRONTIER_MODEL: str = "local/hermes-4.3-36b-tools:latest"
 
     # Telegram Bot
     TELEGRAM_BOT_TOKEN: Optional[str] = None
@@ -40,9 +40,9 @@ class Settings(BaseSettings):
     # Timezone (IANA name, e.g. "America/Los_Angeles", "America/New_York")
     TIMEZONE: str = "America/Los_Angeles"
 
-    # Query depth — set ALWAYS_HEAVY=false in .env to re-enable light/heavy
-    # classification (saves a local LLM call on greetings/chit-chat).
-    # Default is True: every message goes through the full proactive fetch path.
+    # Query depth — set ALWAYS_HEAVY=false in .env to let the deterministic
+    # router keep obvious general-chat turns on the fast path. Default is True:
+    # every message goes through the full proactive fetch path.
     ALWAYS_HEAVY: bool = True
 
     # Morning brief schedule (24h, local time)
@@ -57,9 +57,10 @@ class Settings(BaseSettings):
     API_KEY: Optional[str] = None
 
     # Context compression (Phase 3.2)
-    # Effective context window for the local model in tokens.  Compression
-    # triggers at 80% of this value.  hermes3 (LLaMA 3.1) supports up to 128K
-    # but Ollama's default num_ctx is 2048–8192; set conservatively.
+    # Effective context window for the local model in tokens. Override via the
+    # MODEL_CONTEXT_TOKENS env var in .env. Compression triggers at 80% of
+    # this value. hermes3 (LLaMA 3.1) supports up to 128K but Ollama's
+    # default num_ctx is 2048–8192; set conservatively.
     MODEL_CONTEXT_TOKENS: int = 16384
 
     # System

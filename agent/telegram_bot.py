@@ -30,14 +30,6 @@ _ACK_SYSTEM_PROMPT = (
     "No emojis. No bullet points. No 'certainly' or 'of course'. Keep it under 30 words total."
 )
 
-# Messages that are pure social acknowledgments — no data fetch needed.
-_PURE_ACK_RE = re.compile(
-    r"^\s*(great[,!.]*\s*)?(thanks|thank you|thx|ty|ok|okay|cool|got it|"
-    r"sounds good|perfect|nice|awesome|cheers|noted|will do|👍|🙏)\s*[!.]*\s*$",
-    re.IGNORECASE,
-)
-
-
 class JARViSTelegramBot:
     def __init__(self, token: str, pepper_core, config: Settings):
         self.token = token
@@ -218,13 +210,8 @@ class JARViSTelegramBot:
         session_id = str(update.effective_user.id)
         logger.info("telegram_in", user_id=session_id, text=user_message[:300])
 
-        # Pure social acks never need calendar/inbox/web fetches.
-        if _PURE_ACK_RE.match(user_message):
-            heavy = False
-        elif self.config.ALWAYS_HEAVY:
-            heavy = True
-        else:
-            heavy = await self.pepper.classify_query(user_message)
+        heavy, reason = self.pepper.decide_query_depth(user_message)
+        logger.debug("telegram_query_depth", heavy=heavy, reason=reason, text=user_message[:80])
         chat_task = asyncio.create_task(
             self.pepper.chat(user_message, session_id, heavy=heavy, channel="Telegram")
         )
@@ -241,7 +228,7 @@ class JARViSTelegramBot:
                             {"role": "user", "content": user_message},
                         ]
                     ),
-                    timeout=2.5,
+                    timeout=4,
                 )
                 ack_text = (ack_result.get("content") or "").strip()
                 if not ack_text:

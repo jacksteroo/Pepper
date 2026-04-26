@@ -25,7 +25,7 @@ from agent.error_classifier import (
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def make_mock_config(local_model: str = "hermes3:latest", frontier_model: str = "claude-sonnet-4-6"):
+def make_mock_config(local_model: str = "hermes-4.3-36b-tools:latest", frontier_model: str = "claude-sonnet-4-6"):
     cfg = MagicMock()
     cfg.DEFAULT_LOCAL_MODEL = local_model
     cfg.DEFAULT_FRONTIER_MODEL = frontier_model
@@ -115,7 +115,7 @@ class TestClassifyErrorHeuristics:
         assert classify_error(exc) == ErrorCategory.AUTH
 
     def test_model_unavailable_hint(self):
-        exc = Exception("model not found: hermes3:latest")
+        exc = Exception("model not found: hermes-4.3-36b-tools:latest")
         assert classify_error(exc) == ErrorCategory.MODEL_UNAVAILABLE
 
     def test_internal_server_error_hint(self):
@@ -134,7 +134,7 @@ class TestDecideFallbackBasic:
         self.cfg = make_mock_config()
 
     def test_auth_never_retries(self):
-        d = decide_fallback(ErrorCategory.AUTH, DataSensitivity.SANITIZED, "local/hermes3:latest", self.cfg)
+        d = decide_fallback(ErrorCategory.AUTH, DataSensitivity.SANITIZED, "local/hermes-4.3-36b-tools:latest", self.cfg)
         assert d.should_retry is False
         assert "authentication" in d.user_message.lower() or "auth" in d.user_message.lower()
 
@@ -144,30 +144,30 @@ class TestDecideFallbackBasic:
 
     def test_context_overflow_never_retries_in_llm(self):
         # core.py handles this by compressing and re-calling; llm.py should not retry
-        d = decide_fallback(ErrorCategory.CONTEXT_OVERFLOW, DataSensitivity.SANITIZED, "local/hermes3:latest", self.cfg)
+        d = decide_fallback(ErrorCategory.CONTEXT_OVERFLOW, DataSensitivity.SANITIZED, "local/hermes-4.3-36b-tools:latest", self.cfg)
         assert d.should_retry is False
 
     def test_network_retries_same_model(self):
-        d = decide_fallback(ErrorCategory.NETWORK, DataSensitivity.SANITIZED, "local/hermes3:latest", self.cfg)
+        d = decide_fallback(ErrorCategory.NETWORK, DataSensitivity.SANITIZED, "local/hermes-4.3-36b-tools:latest", self.cfg)
         assert d.should_retry is True
-        assert d.model == "local/hermes3:latest"
+        assert d.model == "local/hermes-4.3-36b-tools:latest"
         assert d.backoff_seconds > 0
 
     def test_unknown_does_not_retry(self):
-        d = decide_fallback(ErrorCategory.UNKNOWN, DataSensitivity.SANITIZED, "local/hermes3:latest", self.cfg)
+        d = decide_fallback(ErrorCategory.UNKNOWN, DataSensitivity.SANITIZED, "local/hermes-4.3-36b-tools:latest", self.cfg)
         assert d.should_retry is False
 
     def test_model_unavailable_local_does_not_retry(self):
         # Ollama runtime failures should retry locally, never cross-provider
-        d = decide_fallback(ErrorCategory.MODEL_UNAVAILABLE, DataSensitivity.SANITIZED, "local/hermes3:latest", self.cfg)
+        d = decide_fallback(ErrorCategory.MODEL_UNAVAILABLE, DataSensitivity.SANITIZED, "local/hermes-4.3-36b-tools:latest", self.cfg)
         assert d.should_retry is True
-        assert d.model == "local/hermes3:latest"
+        assert d.model == "local/hermes-4.3-36b-tools:latest"
         assert "ollama" in d.user_message.lower() or "local" in d.user_message.lower()
 
     def test_rate_limit_local_retries_same(self):
-        d = decide_fallback(ErrorCategory.RATE_LIMIT, DataSensitivity.SANITIZED, "local/hermes3:latest", self.cfg)
+        d = decide_fallback(ErrorCategory.RATE_LIMIT, DataSensitivity.SANITIZED, "local/hermes-4.3-36b-tools:latest", self.cfg)
         assert d.should_retry is True
-        assert d.model == "local/hermes3:latest"
+        assert d.model == "local/hermes-4.3-36b-tools:latest"
 
     def test_rate_limit_frontier_sanitized_falls_back_to_local(self):
         d = decide_fallback(ErrorCategory.RATE_LIMIT, DataSensitivity.SANITIZED, "claude-sonnet-4-6", self.cfg)
@@ -196,7 +196,7 @@ class TestPrivacyInvariant:
         d = decide_fallback(
             ErrorCategory.RATE_LIMIT,
             DataSensitivity.LOCAL_ONLY,
-            "local/hermes3:latest",
+            "local/hermes-4.3-36b-tools:latest",
             self.cfg,
         )
         assert d.model.startswith("local/"), (
@@ -208,7 +208,7 @@ class TestPrivacyInvariant:
         d = decide_fallback(
             ErrorCategory.MODEL_UNAVAILABLE,
             DataSensitivity.LOCAL_ONLY,
-            "local/hermes3:latest",
+            "local/hermes-4.3-36b-tools:latest",
             self.cfg,
         )
         # Must not retry with a frontier model
@@ -220,7 +220,7 @@ class TestPrivacyInvariant:
         d = decide_fallback(
             ErrorCategory.NETWORK,
             DataSensitivity.LOCAL_ONLY,
-            "local/hermes3:latest",
+            "local/hermes-4.3-36b-tools:latest",
             self.cfg,
         )
         assert d.model.startswith("local/"), (
@@ -251,7 +251,7 @@ class TestPrivacyInvariant:
     def test_all_categories_with_local_only_never_produce_frontier_model(self):
         """Exhaustive check: no error category produces a frontier model for local_only data."""
         for cat in ErrorCategory:
-            d = decide_fallback(cat, DataSensitivity.LOCAL_ONLY, "local/hermes3:latest", self.cfg)
+            d = decide_fallback(cat, DataSensitivity.LOCAL_ONLY, "local/hermes-4.3-36b-tools:latest", self.cfg)
             assert d.model.startswith("local/"), (
                 f"PRIVACY VIOLATION: category={cat} with LOCAL_ONLY data proposed "
                 f"non-local model '{d.model}'"
@@ -374,7 +374,7 @@ class TestModelClientClassifiedRetry:
         )
 
         assert len(used_models) == 1
-        assert used_models[0] == "hermes3:latest"  # local_only stripped the prefix
+        assert used_models[0] == "hermes-4.3-36b-tools:latest"  # local_only stripped the prefix
 
     @pytest.mark.asyncio
     async def test_local_only_sensitivity_overrides_frontier_model(self):
@@ -395,7 +395,7 @@ class TestModelClientClassifiedRetry:
         )
 
         assert len(used_models) == 1
-        assert used_models[0] == "hermes3:latest"
+        assert used_models[0] == "hermes-4.3-36b-tools:latest"
 
     @pytest.mark.asyncio
     async def test_local_only_fallback_blocked_at_model_switch(self):
@@ -425,7 +425,7 @@ class TestModelClientClassifiedRetry:
                 with pytest.raises(ClassifiedLLMError):
                     await client.chat(
                         [{"role": "user", "content": "hello"}],
-                        model="local/hermes3:latest",
+                        model="local/hermes-4.3-36b-tools:latest",
                         data_sensitivity=DataSensitivity.LOCAL_ONLY,
                     )
 

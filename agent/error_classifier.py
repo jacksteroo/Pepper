@@ -138,6 +138,15 @@ def classify_error(exc: Exception) -> ErrorCategory:
                 return ErrorCategory.AUTH
             if sc in (500, 502, 503, 504):
                 return ErrorCategory.MODEL_UNAVAILABLE
+            if sc == 400:
+                body = ""
+                try:
+                    body = exc.response.text
+                except Exception:
+                    pass
+                if _OVERFLOW_PATTERNS.search(body):
+                    return ErrorCategory.CONTEXT_OVERFLOW
+                return ErrorCategory.MODEL_UNAVAILABLE
 
         if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError)):
             return ErrorCategory.NETWORK

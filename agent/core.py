@@ -5,7 +5,7 @@ import json
 import re
 import time
 import structlog
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 from agent.config import Settings
@@ -1302,6 +1302,116 @@ class PepperCore:
             response += "\n\nWarnings: " + "; ".join(warnings)
         return response
 
+    def _extract_email_feedback_exclusions(self, user_message: str) -> list[str]:
+        patterns = (
+            re.compile(
+                r"\b(?:this\s+)?(?:email|message)\s+from\s+([^.?!,\n]+?)\s+is\s+not\s+important\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\bfrom\s+([^.?!,\n]+?)\s+is\s+not\s+important\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\bignore\s+(?:emails?\s+from\s+)?([^.?!,\n]+?)\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\bdon['’]t\s+show\s+me\s+(?:emails?\s+from\s+)?([^.?!,\n]+?)(?:\s+again|\s+anymore|\s*$)",
+                re.IGNORECASE,
+            ),
+        )
+        ignored = {"this", "that", "it"}
+        history = []
+        try:
+            history = self.memory.get_working_memory(limit=12)
+        except Exception:
+            history = []
+        user_turns = [m.get("content", "") for m in history if m.get("role") == "user"]
+        user_turns.append(user_message)
+
+        exclusions: list[str] = []
+        for text in user_turns:
+            for pattern in patterns:
+                for match in pattern.findall(text or ""):
+                    candidate = re.split(
+                        r"\b(?:show me|tell me|and|but|please)\b",
+                        match,
+                        maxsplit=1,
+                        flags=re.IGNORECASE,
+                    )[0]
+                    candidate = candidate.strip(" \t\n\r.,;:!?\"'")
+                    if not candidate:
+                        continue
+                    if candidate.lower() in ignored:
+                        continue
+                    if candidate.lower() not in {item.lower() for item in exclusions}:
+                        exclusions.append(candidate)
+        return exclusions
+
+    def _build_calendar_query_window(
+        self,
+        user_message: str,
+    ) -> tuple[dict[str, str], str]:
+        tz = ZoneInfo(self.config.TIMEZONE)
+        now_local = datetime.now(tz)
+        lower = user_message.lower()
+
+        if "today" in lower or "tonight" in lower:
+            start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1) - timedelta(seconds=1)
+            return (
+                {"start_date": start.isoformat(), "end_date": end.isoformat()},
+                "today",
+            )
+
+        if "tomorrow" in lower:
+            start = (now_local + timedelta(days=1)).replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+            end = start + timedelta(days=1) - timedelta(seconds=1)
+            return (
+                {"start_date": start.isoformat(), "end_date": end.isoformat()},
+                "tomorrow",
+            )
+
+        days = 14 if "next week" in lower else 7
+        start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = start + timedelta(days=days) - timedelta(seconds=1)
+        return (
+            {"start_date": start.isoformat(), "end_date": end.isoformat()},
+            f"the next {days} days, including today",
+        )
+
+    def _format_calendar_events_response(self, result: dict, window_label: str) -> str:
+        if "error" in result:
+            return f"I couldn't scan your calendars: {result['error']}"
+
+        warnings = result.get("warnings", [])
+        events = result.get("events", [])
+        if not events:
+            response = (
+                f"I don't see any calendar events for {window_label} "
+                "across your connected calendars."
+            )
+        else:
+            shown = events[:12]
+            lines = [
+                f"I found {len(events)} calendar event(s) for {window_label} across your connected calendars:"
+            ]
+            for event in shown:
+                lines.append(f"- {event.replace(chr(10), chr(10) + '  ')}")
+            if len(events) > len(shown):
+                lines.append(f"- ...and {len(events) - len(shown)} more.")
+            response = "\n".join(lines)
+
+        if warnings:
+            response += "\n\nWarnings: " + "; ".join(warnings)
+        return response
+
     def _answer_identity_question(self, user_message: str) -> str | None:
         normalized = self._normalize_user_text(user_message)
         if not normalized:
@@ -1861,12 +1971,19 @@ class PepperCore:
         if heavy and is_email_action_items_query(user_message):
             await _progress("Scanning inboxes for action items...")
             account_scope = detect_email_account_scope(user_message)
+            email_exclusions = self._extract_email_feedback_exclusions(user_message)
             result = await execute_get_email_action_items(
-                {"account": account_scope, "count": 8, "hours": 168}
+                {
+                    "account": account_scope,
+                    "count": 8,
+                    "hours": 168,
+                    "exclude_phrases": email_exclusions,
+                }
             )
             chat_logger.info(
                 "email_action_items_result",
                 account_scope=account_scope,
+                excluded_phrases=email_exclusions,
                 result=self._summarize_tool_result(result),
             )
             response_text = self._format_email_action_items_response(result, account_scope)
@@ -1886,13 +2003,20 @@ class PepperCore:
             await _progress("Scanning recent emails...")
             account_scope = detect_email_account_scope(user_message)
             hours = detect_email_time_window_hours(user_message)
+            email_exclusions = self._extract_email_feedback_exclusions(user_message)
             result = await execute_get_email_summary(
-                {"account": account_scope, "count": 10, "hours": hours}
+                {
+                    "account": account_scope,
+                    "count": 10,
+                    "hours": hours,
+                    "exclude_phrases": email_exclusions,
+                }
             )
             chat_logger.info(
                 "email_summary_result",
                 account_scope=account_scope,
                 hours=hours,
+                excluded_phrases=email_exclusions,
                 result=self._summarize_tool_result(result),
             )
             response_text = self._format_email_summary_response(result, account_scope)
@@ -1904,6 +2028,32 @@ class PepperCore:
             chat_logger.info(
                 "chat_complete",
                 path="email_summary",
+                duration_ms=round((time.perf_counter() - started_at) * 1000),
+            )
+            return response_text
+
+        if (
+            heavy
+            and routing.intent_type == IntentType.SCHEDULE_LOOKUP
+            and routing.target_sources == ["calendar"]
+        ):
+            await _progress("Scanning calendar...")
+            calendar_args, window_label = self._build_calendar_query_window(user_message)
+            result = await execute_get_calendar_events_range(calendar_args)
+            chat_logger.info(
+                "calendar_schedule_result",
+                window_label=window_label,
+                result=self._summarize_tool_result(result),
+            )
+            response_text = self._format_calendar_events_response(result, window_label)
+            if not isolated:
+                self.memory.add_to_working_memory("assistant", response_text)
+            chat_logger.info("chat_out", text=response_text[:1000])
+            if not isolated:
+                await self._save_conversation(session_id, user_message, response_text)
+            chat_logger.info(
+                "chat_complete",
+                path="calendar_schedule",
                 duration_ms=round((time.perf_counter() - started_at) * 1000),
             )
             return response_text
@@ -2052,8 +2202,11 @@ class PepperCore:
                     ) or _is_open_loop_query
                 )),
                 self._maybe_get_driving_time(user_message),
-                maybe_get_calendar_context(trigger_text),
-                maybe_get_email_context(trigger_text),
+                maybe_get_calendar_context(trigger_text, timezone_name=self.config.TIMEZONE),
+                maybe_get_email_context(
+                    trigger_text,
+                    exclude_phrases=self._extract_email_feedback_exclusions(user_message),
+                ),
                 maybe_get_imessage_context(trigger_text),
                 maybe_get_whatsapp_context(trigger_text),
                 maybe_get_slack_context(trigger_text),

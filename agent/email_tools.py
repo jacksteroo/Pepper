@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from difflib import SequenceMatcher
 from typing import Any
 
 import structlog
@@ -43,6 +44,10 @@ _EMAIL_COUNT_QUERY_TERMS = (
 _EMAIL_SUMMARY_TRIGGERS = (
     "anything important",
     "important",
+    "check my email",
+    "check my emails",
+    "review my email",
+    "review my emails",
     "what came in",
     "what landed",
     "received",
@@ -52,6 +57,11 @@ _EMAIL_SUMMARY_TRIGGERS = (
     "last night",
     "this morning",
     "today",
+    "other emails",
+    "more emails",
+    "show me more emails",
+    "show me more",
+    "once more",
 )
 
 _ACTION_PATTERNS: tuple[tuple[str, int, str], ...] = (
@@ -261,6 +271,51 @@ def _clean_subject(value: str) -> str:
     return value[:100]
 
 
+def _normalize_match_text(value: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", " ", (value or "").lower())
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _message_matches_exclusion(msg: dict[str, Any], phrase: str) -> bool:
+    normalized_phrase = _normalize_match_text(phrase)
+    if not normalized_phrase:
+        return False
+
+    phrase_tokens = set(normalized_phrase.split())
+    candidates = (
+        msg.get("from", ""),
+        msg.get("subject", ""),
+        msg.get("snippet", ""),
+    )
+    for candidate in candidates:
+        normalized_candidate = _normalize_match_text(candidate)
+        if not normalized_candidate:
+            continue
+        if normalized_phrase in normalized_candidate:
+            return True
+        candidate_tokens = set(normalized_candidate.split())
+        overlap = len(phrase_tokens & candidate_tokens)
+        if overlap and overlap / max(len(phrase_tokens), 1) >= 0.5:
+            return True
+        if SequenceMatcher(None, normalized_phrase, normalized_candidate).ratio() >= 0.72:
+            return True
+    return False
+
+
+def _filter_excluded_messages(
+    messages: list[dict[str, Any]],
+    exclude_phrases: list[str] | None,
+) -> list[dict[str, Any]]:
+    if not exclude_phrases:
+        return messages
+    filtered: list[dict[str, Any]] = []
+    for msg in messages:
+        if any(_message_matches_exclusion(msg, phrase) for phrase in exclude_phrases):
+            continue
+        filtered.append(msg)
+    return filtered
+
+
 def _format_action_item(msg: dict[str, Any], reasons: list[str]) -> str:
     account = _email_label(msg.get("account", "")) if msg.get("account") else ""
     sender = _clean_sender(msg.get("from", ""))
@@ -408,6 +463,11 @@ async def execute_get_recent_emails(args: dict) -> dict:
     account = args.get("account", "all")
     count = min(int(args.get("count", 10)), 30)
     hours = int(args.get("hours", 24))
+    exclude_phrases = [
+        str(phrase).strip()
+        for phrase in (args.get("exclude_phrases") or [])
+        if str(phrase).strip()
+    ]
 
     accounts_to_check = _all_accounts() if account == "all" else [account]
     all_emails = []
@@ -424,19 +484,26 @@ async def execute_get_recent_emails(args: dict) -> dict:
             errors.append(f"{acct}: not configured (run setup_auth.py)")
         except Exception as e:
             logger.warning("email_fetch_failed", account=acct, error=str(e))
-            errors.append(f"{acct}: {e}")
+            err_str = str(e)
+            if "invalid_grant" in err_str:
+                errors.append(f"{acct}: token expired — re-run setup_auth to reconnect")
+            else:
+                errors.append(f"{acct}: {e}")
 
     if not all_emails and errors:
         return {"error": "; ".join(errors)}
 
-    formatted = [_format_email(m, include_account=(account == "all")) for m in all_emails]
+    filtered_emails = _filter_excluded_messages(all_emails, exclude_phrases)
+    formatted = [_format_email(m, include_account=(account == "all")) for m in filtered_emails]
     result: dict = {
-        "items": all_emails,
+        "items": filtered_emails,
         "emails": formatted,
-        "count": len(all_emails),
+        "count": len(filtered_emails),
         "hours": hours,
-        "summary": f"{len(all_emails)} email(s) in the last {hours} hour(s).",
+        "summary": f"{len(filtered_emails)} email(s) in the last {hours} hour(s).",
     }
+    if exclude_phrases:
+        result["excluded_phrases"] = exclude_phrases
     if errors:
         result["warnings"] = errors
     return result
@@ -513,9 +580,15 @@ async def execute_get_email_action_items(args: dict) -> dict:
     account = args.get("account", "all")
     hours = int(args.get("hours", 168))
     count = min(int(args.get("count", 8)), 30)
+    exclude_phrases = args.get("exclude_phrases") or []
 
     recent = await execute_get_recent_emails(
-        {"account": account, "count": count, "hours": hours}
+        {
+            "account": account,
+            "count": count,
+            "hours": hours,
+            "exclude_phrases": exclude_phrases,
+        }
     )
     if "error" in recent:
         return recent
@@ -565,9 +638,15 @@ async def execute_get_email_summary(args: dict) -> dict:
     account = args.get("account", "all")
     hours = int(args.get("hours", 24))
     count = min(int(args.get("count", 10)), 30)
+    exclude_phrases = args.get("exclude_phrases") or []
 
     recent = await execute_get_recent_emails(
-        {"account": account, "count": count, "hours": hours}
+        {
+            "account": account,
+            "count": count,
+            "hours": hours,
+            "exclude_phrases": exclude_phrases,
+        }
     )
     if "error" in recent:
         return recent
@@ -622,7 +701,11 @@ def is_email_query(user_message: str) -> bool:
     )
 
 
-async def maybe_get_email_context(user_message: str) -> str:
+async def _maybe_get_email_context(
+    user_message: str,
+    *,
+    exclude_phrases: list[str] | None,
+) -> str:
     """Proactively inject unread counts when the query is email-related."""
     if not is_email_query(user_message):
         return ""
@@ -638,7 +721,12 @@ async def maybe_get_email_context(user_message: str) -> str:
         scope = detect_email_account_scope(user_message)
         if is_email_action_items_query(user_message):
             action_items = await execute_get_email_action_items(
-                {"account": scope, "count": 8, "hours": 168}
+                {
+                    "account": scope,
+                    "count": 8,
+                    "hours": 168,
+                    "exclude_phrases": exclude_phrases or [],
+                }
             )
             if action_items.get("action_items"):
                 lines.append("")
@@ -656,6 +744,7 @@ async def maybe_get_email_context(user_message: str) -> str:
                     "account": scope,
                     "count": 8,
                     "hours": detect_email_time_window_hours(user_message),
+                    "exclude_phrases": exclude_phrases or [],
                 }
             )
             lines.append("")
@@ -678,7 +767,12 @@ async def maybe_get_email_context(user_message: str) -> str:
                 lines.append("No recent emails surfaced in that time window.")
         elif scope != "all":
             recent = await execute_get_recent_emails(
-                {"account": scope, "count": 5, "hours": 72}
+                {
+                    "account": scope,
+                    "count": 5,
+                    "hours": 72,
+                    "exclude_phrases": exclude_phrases or [],
+                }
             )
             if recent.get("items"):
                 label = _email_label(scope) if scope != "all" else "connected accounts"
@@ -697,3 +791,14 @@ async def maybe_get_email_context(user_message: str) -> str:
     except Exception as e:
         logger.warning("email_proactive_failed", error=str(e))
         return ""
+
+
+async def maybe_get_email_context(
+    user_message: str,
+    *,
+    exclude_phrases: list[str] | None = None,
+) -> str:
+    return await _maybe_get_email_context(
+        user_message,
+        exclude_phrases=exclude_phrases,
+    )

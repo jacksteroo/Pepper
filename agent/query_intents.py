@@ -27,6 +27,7 @@ EMAIL_QUERY_TERMS = (
 
 IMESSAGE_QUERY_TERMS = (
     "imessage",
+    "imessages",
     "text",
     "texts",
     "texted",
@@ -112,7 +113,11 @@ ACTION_ITEM_INTENT_TERMS = (
     "follow up",
     "follow-up",
     "todo",
+    "todo list",
     "to do",
+    "to do list",
+    "to-do",
+    "to-do list",
     "need to reply",
     "needs a reply",
     "needs reply",
@@ -154,12 +159,19 @@ _CALENDAR_DAY_HINTS: tuple[tuple[tuple[str, ...], int], ...] = (
 
 
 def normalize_user_text(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip().lower())
+    lowered = (text or "").strip().lower()
+    alnum_spaced = re.sub(r"[^a-z0-9]+", " ", lowered)
+    return re.sub(r"\s+", " ", alnum_spaced).strip()
 
 
 def contains_any(text: str, phrases: Iterable[str]) -> bool:
     normalized = normalize_user_text(text)
-    return any(phrase.lower() in normalized for phrase in phrases)
+    haystack = f" {normalized} "
+    for phrase in phrases:
+        needle = normalize_user_text(phrase)
+        if needle and f" {needle} " in haystack:
+            return True
+    return False
 
 
 def is_search_request(user_message: str) -> bool:

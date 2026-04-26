@@ -35,6 +35,7 @@ from agent.query_intents import (
     ACTION_ITEM_INTENT_TERMS,
     NON_EMAIL_CHANNEL_TERMS,
 )
+from agent.local_filesystem_tools import extract_path_from_text
 
 if TYPE_CHECKING:
     from agent.capability_registry import CapabilityRegistry
@@ -235,6 +236,37 @@ _BEFORE_EVENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_FILESYSTEM_NOUN_TERMS = (
+    "file",
+    "files",
+    "folder",
+    "folders",
+    "path",
+    "paths",
+    "directory",
+    "directories",
+)
+_FILESYSTEM_LOOKUP_TERMS = (
+    "what is in",
+    "what s in",
+    "what is inside",
+    "what s inside",
+    "contents of",
+    "content of",
+    "show me",
+    "list",
+    "read",
+    "open",
+    "inspect",
+    "summarize",
+    "check",
+)
+_TODO_LIST_TERMS = (
+    "todo list",
+    "to do list",
+    "to-do list",
+)
+
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
@@ -395,6 +427,8 @@ class QueryRouter:
         normalized = normalize_user_text(user_message)
         time_scope = _infer_time_scope(user_message)
         entity_targets = _extract_entity_targets(user_message)
+        path_target = extract_path_from_text(user_message)
+        filesystem_hint = bool(path_target) or contains_any(normalized, _FILESYSTEM_NOUN_TERMS)
 
         is_compound = (
             contains_any(normalized, _COMPOUND_ACTION_INDICATORS)
@@ -421,7 +455,10 @@ class QueryRouter:
         if not is_compound and (
             _CAPABILITY_RE.search(user_message) or contains_any(normalized, _CAPABILITY_TERMS)
         ):
-            sources = _infer_target_sources(user_message) or ["unknown"]
+            sources = _infer_target_sources(user_message)
+            if not sources and filesystem_hint:
+                sources = ["filesystem"]
+            sources = sources or ["unknown"]
             d = RoutingDecision(
                 intent_type=IntentType.CAPABILITY_CHECK,
                 target_sources=sources,
@@ -548,6 +585,20 @@ class QueryRouter:
             self._log(user_message, d)
             return self._apply_registry(d, capability_registry)
 
+        # Explicit to-do list phrasing looks superficially like a schedule query
+        # because of "what's on...", but it is an action-item request.
+        if contains_any(normalized, _TODO_LIST_TERMS):
+            d = RoutingDecision(
+                intent_type=IntentType.ACTION_ITEMS,
+                target_sources=["email", "imessage", "whatsapp", "slack"],
+                action_mode=ActionMode.CALL_TOOLS,
+                time_scope=time_scope,
+                entity_targets=entity_targets,
+                reasoning="explicit to-do list phrasing",
+            )
+            self._log(user_message, d)
+            return self._apply_registry(d, capability_registry)
+
         # ── 5. Schedule / calendar lookup ─────────────────────────────────────
         if contains_any(normalized, CALENDAR_QUERY_TERMS):
             d = RoutingDecision(
@@ -578,6 +629,21 @@ class QueryRouter:
             return self._apply_registry(d, capability_registry)
 
         # ── 7 & 8. Source-targeted queries ────────────────────────────────────
+        if path_target and (
+            contains_any(normalized, _FILESYSTEM_LOOKUP_TERMS)
+            or normalized.startswith(("what ", "show ", "list ", "read ", "open ", "inspect ", "summarize ", "check "))
+        ):
+            d = RoutingDecision(
+                intent_type=IntentType.CONVERSATION_LOOKUP,
+                target_sources=["filesystem"],
+                action_mode=ActionMode.CALL_TOOLS,
+                time_scope=time_scope,
+                entity_targets=entity_targets,
+                reasoning="filesystem path matched",
+            )
+            self._log(user_message, d)
+            return self._apply_registry(d, capability_registry)
+
         inferred = _infer_target_sources(user_message)
 
         # Phase 6.5: carry-over from recent turns.

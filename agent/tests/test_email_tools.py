@@ -210,3 +210,41 @@ async def test_maybe_get_email_context_includes_recent_summary_for_overnight_que
     assert "Email unread counts:" in context
     assert "Recent important emails:" in context
     assert "Deadline moved up" in context
+
+
+@pytest.mark.asyncio
+async def test_execute_get_email_summary_filters_recently_deprioritized_sender(monkeypatch):
+    monkeypatch.setattr(email_tools, "_all_accounts", lambda: ["personal"])
+
+    class FakeClient:
+        def get_recent_messages(self, count: int, hours: int):
+            return [
+                {
+                    "date": "Wed, 15 Apr 2026 08:00:00 +0000",
+                    "from": "Moffett Field Golf Course <course@golffacility.com>",
+                    "subject": "Driving Range Closure Starting Tomorrow!",
+                    "snippet": "Schedule update",
+                    "unread": True,
+                },
+                {
+                    "date": "Wed, 15 Apr 2026 09:00:00 +0000",
+                    "from": "Boss <boss@example.com>",
+                    "subject": "Please review today",
+                    "snippet": "Need your input",
+                    "unread": True,
+                },
+            ]
+
+    monkeypatch.setattr(email_tools, "_get_client", lambda account_name: FakeClient())
+
+    result = await email_tools.execute_get_email_summary(
+        {
+            "account": "all",
+            "count": 5,
+            "hours": 24,
+            "exclude_phrases": ["Moffett Fiels"],
+        }
+    )
+
+    assert result["count"] == 1
+    assert all("Moffett" not in item["formatted"] for item in result["emails"])

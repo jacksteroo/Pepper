@@ -169,7 +169,7 @@ def test_get_full_report_structure(populated_registry):
 # ── SOURCE_ALIASES coverage ────────────────────────────────────────────────────
 
 def test_source_aliases_cover_common_terms():
-    for alias in ("email", "gmail", "yahoo", "imessage", "text", "whatsapp", "slack", "calendar"):
+    for alias in ("email", "gmail", "yahoo", "imessage", "text", "whatsapp", "slack", "calendar", "filesystem"):
         assert alias in SOURCE_ALIASES, f"Missing alias: {alias}"
 
 
@@ -232,6 +232,17 @@ async def test_check_imessage_permission_denied():
 
 
 @pytest.mark.asyncio
+async def test_check_imessage_uses_shared_client_path(tmp_path):
+    """Registry should reuse the same resolved DB path as the iMessage client."""
+    reg = CapabilityRegistry()
+    db_path = tmp_path / "chat.db"
+    db_path.write_text("stub")
+    with patch("subsystems.communications.imessage_client.IMESSAGE_DB", db_path):
+        await reg._check_imessage()
+    assert reg.get_status("imessage") == CapabilityStatus.AVAILABLE
+
+
+@pytest.mark.asyncio
 async def test_populate_slack_configured():
     config = MagicMock()
     reg = CapabilityRegistry()
@@ -259,6 +270,13 @@ async def test_populate_memory_always_available():
     reg = CapabilityRegistry()
     await reg._check_memory()
     assert reg.get_status("memory") == CapabilityStatus.AVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_populate_local_files_always_available():
+    reg = CapabilityRegistry()
+    await reg._check_local_filesystem()
+    assert reg.get_status("local_files") == CapabilityStatus.AVAILABLE
 
 
 @pytest.mark.asyncio

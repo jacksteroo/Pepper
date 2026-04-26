@@ -25,14 +25,26 @@ A sovereign, local-first AI life assistant. Knows your life context deeply. Runs
 | Python 3.10+ | `python3 --version` |
 | Docker | For PostgreSQL + pgvector |
 | [Ollama](https://ollama.ai) | Local LLM inference |
-| Ollama models | `ollama pull nous-hermes2:34b && ollama pull nomic-embed-text` |
+| Ollama models | `ollama pull hermes-4.3-36b-q4:latest && ./scripts/package_hermes4_ollama.sh && ollama pull nomic-embed-text` |
 | Anthropic API key | Optional — for complex reasoning. Pepper degrades gracefully without it |
 | Telegram bot token | Optional — get from [@BotFather](https://t.me/BotFather) |
 | Google OAuth credentials | Optional — for Calendar and Gmail integration. See `subsystems/*/setup_auth.py` |
 | Brave Search API key | Optional — for web search capability |
 | Google Maps API key | Optional — for driving time/routing queries |
 
-**Hardware**: 64GB unified memory (M3/M4 Max) runs nous-hermes2:34b well. 36GB runs 32B models comfortably.
+**Hardware**: 64GB unified memory (M3/M4 Max) runs hermes-4.3-36b-tools:latest well. 36GB runs 32B models comfortably.
+
+If you use Hermes 4.3 with Pepper, package it through the repo Modelfile instead of
+using the raw `hermes-4.3-36b-q4:latest` template directly. The packaged model enables
+tool-aware prompting for Ollama and is created as `hermes-4.3-36b-tools:latest` by
+default:
+
+```bash
+ollama pull hermes-4.3-36b-q4:latest
+./scripts/package_hermes4_ollama.sh
+```
+
+Then set `DEFAULT_LOCAL_MODEL=hermes-4.3-36b-tools:latest` in `.env`.
 
 ---
 
@@ -123,7 +135,7 @@ Telegram / Web UI / API
 
 Two LLM tiers:
 
-- **Local** (Ollama / nous-hermes2:34b) — all raw personal data, background tasks, routine retrieval
+- **Local** (Ollama / hermes-4.3-36b-tools:latest) — all raw personal data, background tasks, routine retrieval
 - **Frontier** (Claude API) — complex reasoning, summaries only, never raw personal data
 
 ---

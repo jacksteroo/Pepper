@@ -132,6 +132,24 @@ MEMORY_TOOLS = [
         "type": "function",
         "side_effects": True,
         "function": {
+            "name": "reset_memory",
+            "description": "Wipe all of Pepper's memory — recall events, archival summaries, and conversation history. Use ONLY when explicitly asked by the owner. This is irreversible.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "confirm": {
+                        "type": "boolean",
+                        "description": "Must be true to proceed",
+                    },
+                },
+                "required": ["confirm"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "side_effects": True,
+        "function": {
             "name": "mark_commitment_complete",
             "description": "Mark a commitment or promise as completed. Use when your owner tells you they've followed through on something.",
             "parameters": {

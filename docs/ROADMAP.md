@@ -55,7 +55,7 @@ See [LIFE_CONTEXT.md.example](LIFE_CONTEXT.md.example) for the annotated templat
 **1.1 — Agent Runtime** ✅
 
 - FastAPI-based orchestrator (custom implementation, not Letta/MemGPT)
-- Ollama integration (nous-hermes2:34b as primary local model)
+- Ollama integration (hermes-4.3-36b-tools:latest as primary local model)
 - Claude API integration for reasoning-heavy tasks
 - Life context document loaded into agent at startup
 
@@ -247,7 +247,7 @@ Context: Phases 1–2 proved the architecture works. Before building more capabi
 
 ### 3.2 — Context Compression ✅
 
-**Problem**: Long conversations grow until they hit the model's context window. There's no compression strategy, so multi-hour sessions either degrade or fail. This is especially painful on local Ollama models with smaller context windows (nous-hermes2:34b is 8K–32K depending on variant).
+**Problem**: Long conversations grow until they hit the model's context window. There's no compression strategy, so multi-hour sessions either degrade or fail. This is especially painful on local Ollama models with smaller context windows (hermes-4.3-36b-tools:latest is 8K–32K depending on variant).
 
 **Approach**:
 
@@ -584,7 +584,7 @@ Subphases 6.1–6.4 address the three routing-level blockers:
 
 **Files added**:
 - New: `agent/query_router.py` — `QueryRouter`, `RoutingDecision`, `IntentType`, `ActionMode`; deterministic 9-rule priority chain ✅
-- `agent/core.py` — routing step runs before classify_query; capability-check short-circuit; entity-target logging ✅
+- `agent/core.py` — routing step runs before depth selection; capability-check short-circuit; entity-target logging ✅
 
 ### 6.2 — Prompt/Tool Contract Cleanup ✅
 

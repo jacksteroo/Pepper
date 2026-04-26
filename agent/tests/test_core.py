@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,9 +8,9 @@ def make_mock_config():
     config.LIFE_CONTEXT_PATH = "docs/LIFE_CONTEXT.md"
     config.OWNER_NAME = "Jack Chan"
     config.TIMEZONE = "UTC"
-    config.DEFAULT_LOCAL_MODEL = "hermes3:latest"
-    config.DEFAULT_FRONTIER_MODEL = "local/hermes3:latest"
-    config.select_model.return_value = "local/hermes3:latest"
+    config.DEFAULT_LOCAL_MODEL = "hermes-4.3-36b-tools:latest"
+    config.DEFAULT_FRONTIER_MODEL = "local/hermes-4.3-36b-tools:latest"
+    config.select_model.return_value = "local/hermes-4.3-36b-tools:latest"
     return config
 
 
@@ -18,8 +19,238 @@ def make_mock_llm():
     llm.chat.return_value = {"content": "Hello, I'm Pepper.", "tool_calls": []}
     llm.embed.return_value = [0.1] * 768
     llm.config = MagicMock()
-    llm.config.DEFAULT_LOCAL_MODEL = "hermes3:latest"
+    llm.config.DEFAULT_LOCAL_MODEL = "hermes-4.3-36b-tools:latest"
     return llm
+
+
+def test_decide_query_depth_fast_paths_personal_context_questions():
+    """Obvious personal-context questions should go HEAVY without an LLM classifier."""
+    from agent.core import PepperCore
+
+    config = make_mock_config()
+    config.ALWAYS_HEAVY = False
+
+    with patch("agent.core.ModelClient") as MockLLM, \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter") as MockRouter, \
+         patch("agent.core.build_system_prompt", return_value="system"):
+
+        mock_llm = make_mock_llm()
+        MockLLM.return_value = mock_llm
+        MockMem.return_value._working = []
+        MockRouter.return_value.get_status.return_value = {}
+
+        pepper = PepperCore(config)
+
+        heavy, reason = pepper.decide_query_depth("What's my situation right now?")
+
+        assert heavy is True
+        assert reason == "personal_context"
+
+
+def test_decide_query_depth_general_chat_stays_light():
+    """Simple general chat should stay on the fast path when ALWAYS_HEAVY=false."""
+    from agent.core import PepperCore
+
+    config = make_mock_config()
+    config.ALWAYS_HEAVY = False
+
+    with patch("agent.core.ModelClient") as MockLLM, \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter") as MockRouter, \
+         patch("agent.core.build_system_prompt", return_value="system"):
+
+        mock_llm = make_mock_llm()
+        MockLLM.return_value = mock_llm
+        MockMem.return_value._working = []
+        MockRouter.return_value.get_status.return_value = {}
+
+        pepper = PepperCore(config)
+
+        heavy, reason = pepper.decide_query_depth("Explain recursion simply.")
+
+        assert heavy is False
+        assert reason == "general_chat"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_reason"),
+    [
+        ("thank you so much", "pure_ack"),
+        ("copy that", "pure_ack"),
+        ("looks perfect", "pure_ack"),
+        ("all good thanks", "pure_ack"),
+        ("roger that", "pure_ack"),
+    ],
+)
+def test_decide_query_depth_expanded_pure_acks_stay_light(message, expected_reason):
+    """Expanded pure-ack phrases should stay on the fast path."""
+    from agent.core import PepperCore
+
+    config = make_mock_config()
+    config.ALWAYS_HEAVY = False
+
+    with patch("agent.core.ModelClient") as MockLLM, \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter") as MockRouter, \
+         patch("agent.core.build_system_prompt", return_value="system"):
+
+        mock_llm = make_mock_llm()
+        MockLLM.return_value = mock_llm
+        MockMem.return_value._working = []
+        MockRouter.return_value.get_status.return_value = {}
+
+        pepper = PepperCore(config)
+
+        heavy, reason = pepper.decide_query_depth(message)
+
+        assert heavy is False
+        assert reason == expected_reason
+
+
+def test_decide_query_depth_structured_queries_stay_heavy():
+    """Structured personal-data/tool requests should stay on the heavy path."""
+    from agent.core import PepperCore
+
+    config = make_mock_config()
+    config.ALWAYS_HEAVY = False
+
+    with patch("agent.core.ModelClient") as MockLLM, \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter") as MockRouter, \
+         patch("agent.core.build_system_prompt", return_value="system"):
+
+        mock_llm = make_mock_llm()
+        MockLLM.return_value = mock_llm
+        MockMem.return_value._working = []
+        MockRouter.return_value.get_status.return_value = {}
+
+        pepper = PepperCore(config)
+
+        heavy, reason = pepper.decide_query_depth("What do I have on my calendar today?")
+
+        assert heavy is True
+        assert reason == "router_schedule_lookup"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_reason"),
+    [
+        ("What's the weather like tomorrow?", "example_tool_query"),
+        ("Give me the news highlights today.", "example_tool_query"),
+        ("What's on my to-do list?", "router_action_items"),
+    ],
+)
+def test_decide_query_depth_example_queries_stay_heavy(message, expected_reason):
+    """Example-shaped current-info and to-do queries should stay on the tool path."""
+    from agent.core import PepperCore
+
+    config = make_mock_config()
+    config.ALWAYS_HEAVY = False
+
+    with patch("agent.core.ModelClient") as MockLLM, \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter") as MockRouter, \
+         patch("agent.core.build_system_prompt", return_value="system"):
+
+        mock_llm = make_mock_llm()
+        MockLLM.return_value = mock_llm
+        MockMem.return_value._working = []
+        MockRouter.return_value.get_status.return_value = {}
+
+        pepper = PepperCore(config)
+
+        heavy, reason = pepper.decide_query_depth(message)
+
+        assert heavy is True
+        assert reason == expected_reason
+
+
+@pytest.mark.asyncio
+async def test_chat_general_chat_uses_single_llm_call_when_not_always_heavy():
+    """General chat should answer directly without a separate classifier call."""
+    from agent.core import PepperCore
+
+    config = make_mock_config()
+    config.ALWAYS_HEAVY = False
+
+    with patch("agent.core.ModelClient") as MockLLM, \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter") as MockRouter, \
+         patch("agent.core.build_system_prompt", return_value="system"), \
+         patch("agent.core.CommitmentExtractor") as MockExtractor:
+
+        mock_llm = make_mock_llm()
+        MockLLM.return_value = mock_llm
+
+        mock_memory = MagicMock()
+        mock_memory.add_to_working_memory = MagicMock()
+        mock_memory.get_working_memory = MagicMock(return_value=[])
+        mock_memory.build_context_for_query = AsyncMock(return_value="")
+        mock_memory.save_to_recall = AsyncMock()
+        MockMem.return_value = mock_memory
+
+        MockRouter.return_value.check_health = AsyncMock(return_value={})
+        MockRouter.return_value.is_mcp_tool = MagicMock(return_value=False)
+        MockRouter.return_value.is_mcp_read_only_tool = MagicMock(return_value=False)
+        MockRouter.return_value.list_available_tools = AsyncMock(return_value=[])
+        MockRouter.return_value.get_status.return_value = {}
+
+        MockExtractor.return_value.has_commitment_language = MagicMock(return_value=False)
+
+        pepper = PepperCore(config)
+        pepper._initialized = True
+        pepper._system_prompt = "system"
+
+        response = await pepper.chat("Explain recursion simply.", "test-session")
+
+        assert isinstance(response, str)
+        assert mock_llm.chat.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_live_data_query_keeps_search_tool_available():
+    """Weather/news-style queries should keep search_web available even on fallback routing."""
+    from agent.core import PepperCore
+
+    config = make_mock_config()
+    config.ALWAYS_HEAVY = False
+    config.BRAVE_API_KEY = ""
+    config.GOOGLE_MAPS_API_KEY = ""
+
+    with patch("agent.core.ModelClient") as MockLLM, \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter") as MockRouter, \
+         patch("agent.core.build_system_prompt", return_value="system"), \
+         patch("agent.core.CommitmentExtractor") as MockExtractor:
+
+        mock_llm = make_mock_llm()
+        MockLLM.return_value = mock_llm
+
+        mock_memory = MagicMock()
+        mock_memory.add_to_working_memory = MagicMock()
+        mock_memory.get_working_memory = MagicMock(return_value=[])
+        mock_memory.build_context_for_query = AsyncMock(return_value="")
+        mock_memory.save_to_recall = AsyncMock()
+        MockMem.return_value = mock_memory
+
+        MockRouter.return_value.check_health = AsyncMock(return_value={})
+        MockRouter.return_value.is_mcp_tool = MagicMock(return_value=False)
+        MockRouter.return_value.is_mcp_read_only_tool = MagicMock(return_value=False)
+        MockRouter.return_value.list_available_tools = AsyncMock(return_value=[])
+        MockRouter.return_value.get_status.return_value = {}
+        MockRouter.return_value.get_mcp_tools.return_value = []
+
+        MockExtractor.return_value.has_commitment_language = MagicMock(return_value=False)
+
+        pepper = PepperCore(config)
+        pepper._initialized = True
+        pepper._system_prompt = "system"
+
+        await pepper.chat("What's the weather like tomorrow?", "test-session")
+
+        tools = mock_llm.chat.await_args.kwargs["tools"]
+        assert any(t.get("function", {}).get("name") == "search_web" for t in tools)
 
 
 @pytest.mark.asyncio
@@ -121,6 +352,59 @@ async def test_pepper_core_chat_answers_identity_without_llm():
         response = await pepper.chat("Who am I and who are you?", "test-session")
 
         assert response == "You are Jack Chan. I'm Pepper, your AI life assistant."
+        mock_llm.chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pepper_core_local_path_query_bypasses_llm():
+    """Direct path-inspection questions should be answered deterministically."""
+    from agent.core import PepperCore
+
+    config = make_mock_config()
+    config.ALWAYS_HEAVY = False
+
+    with patch("agent.core.ModelClient") as MockLLM, \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter") as MockRouter, \
+         patch("agent.core.build_system_prompt", return_value="system"), \
+         patch("agent.core.CommitmentExtractor") as MockExtractor, \
+         patch(
+             "agent.core.execute_inspect_local_path",
+             new=AsyncMock(return_value={
+                 "kind": "directory",
+                 "requested_path": "/data/messages",
+                 "resolved_path": "/data/messages",
+                 "entry_count": 2,
+                 "entries": [
+                     {"name": "chat.db", "kind": "file", "size_bytes": 12345},
+                     {"name": "attachments", "kind": "directory", "size_bytes": None},
+                 ],
+                 "truncated": False,
+             }),
+         ):
+
+        mock_llm = make_mock_llm()
+        MockLLM.return_value = mock_llm
+
+        mock_memory = MagicMock()
+        mock_memory.add_to_working_memory = MagicMock()
+        mock_memory.get_working_memory = MagicMock(return_value=[])
+        MockMem.return_value = mock_memory
+
+        MockRouter.return_value.check_health = AsyncMock(return_value={})
+        MockRouter.return_value.list_available_tools = AsyncMock(return_value=[])
+        MockRouter.return_value.get_status.return_value = {}
+
+        MockExtractor.return_value.has_commitment_language = MagicMock(return_value=False)
+
+        pepper = PepperCore(config)
+        pepper._initialized = True
+        pepper._system_prompt = "system"
+
+        response = await pepper.chat("What is in /data/messages folder?", "test-session")
+
+        assert "/data/messages is accessible" in response
+        assert "chat.db" in response
         mock_llm.chat.assert_not_called()
 
 
@@ -229,6 +513,58 @@ async def test_pepper_core_email_summary_query_bypasses_llm():
 
         assert "most important" in response.lower()
         assert "deadline moved up" in response.lower()
+        mock_llm.chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pepper_core_calendar_query_bypasses_llm():
+    """Simple calendar checks should return deterministic calendar data."""
+    from agent.core import PepperCore
+
+    config = make_mock_config()
+
+    with patch("agent.core.ModelClient") as MockLLM, \
+         patch("agent.core.MemoryManager") as MockMem, \
+         patch("agent.core.ToolRouter") as MockRouter, \
+         patch("agent.core.build_system_prompt", return_value="system"), \
+         patch("agent.core.CommitmentExtractor") as MockExtractor, \
+         patch(
+             "agent.core.execute_get_calendar_events_range",
+             new=AsyncMock(return_value={
+                 "events": [
+                     "2026-04-26 all day — Family trip\n  Calendar: Family",
+                     "2026-04-26 6:00 PM PDT — Dinner\n  Calendar: Personal",
+                 ],
+                 "count": 2,
+             }),
+         ):
+
+        mock_llm = make_mock_llm()
+        MockLLM.return_value = mock_llm
+
+        mock_memory = MagicMock()
+        mock_memory.add_to_working_memory = MagicMock()
+        mock_memory.get_working_memory = MagicMock(return_value=[])
+        MockMem.return_value = mock_memory
+
+        MockRouter.return_value.check_health = AsyncMock(return_value={})
+        MockRouter.return_value.list_available_tools = AsyncMock(return_value=[])
+        MockRouter.return_value.get_status.return_value = {}
+
+        MockExtractor.return_value.has_commitment_language = MagicMock(return_value=False)
+
+        pepper = PepperCore(config)
+        pepper._initialized = True
+        pepper._system_prompt = "system"
+
+        response = await pepper.chat(
+            "check my calendar",
+            "test-session",
+            heavy=True,
+        )
+
+        assert "calendar event(s)" in response.lower()
+        assert "calendar: family" in response.lower()
         mock_llm.chat.assert_not_called()
 
 
@@ -781,7 +1117,7 @@ async def test_handle_tool_calls_ground_search_web_links_to_returned_results():
                 {"role": "system", "content": "system"},
                 {"role": "user", "content": "What's the latest financial news of the day?"},
             ],
-            "local/hermes3:latest",
+            "local/hermes-4.3-36b-tools:latest",
             "test-session",
         )
 

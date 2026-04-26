@@ -57,7 +57,7 @@ async def test_score_importance_uses_local_model():
     mock_llm = AsyncMock()
     mock_llm.chat.return_value = {"content": "0.8"}
     mock_llm.config = MagicMock()
-    mock_llm.config.DEFAULT_LOCAL_MODEL = "hermes3:latest"
+    mock_llm.config.DEFAULT_LOCAL_MODEL = "hermes-4.3-36b-tools:latest"
 
     mm = MemoryManager(llm_client=mock_llm)
     score = await mm._score_importance("My father was diagnosed with cancer today.")
@@ -70,7 +70,7 @@ async def test_score_importance_fallback_on_error():
     mock_llm = AsyncMock()
     mock_llm.chat.side_effect = Exception("LLM unavailable")
     mock_llm.config = MagicMock()
-    mock_llm.config.DEFAULT_LOCAL_MODEL = "hermes3:latest"
+    mock_llm.config.DEFAULT_LOCAL_MODEL = "hermes-4.3-36b-tools:latest"
 
     mm = MemoryManager(llm_client=mock_llm)
     score = await mm._score_importance("some content")

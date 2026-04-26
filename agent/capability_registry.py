@@ -63,6 +63,7 @@ SOURCE_ALIASES: dict[str, list[str]] = {
     "images": ["web_search"],
     "web": ["web_search"],
     "search": ["web_search"],
+    "filesystem": ["local_files"],
 }
 
 
@@ -292,6 +293,7 @@ class CapabilityRegistry:
             self._check_calendar(),
             self._check_web_search(config),
             self._check_memory(),
+            self._check_local_filesystem(),
             return_exceptions=True,
         )
         logger.info(
@@ -343,10 +345,12 @@ class CapabilityRegistry:
                       detail="No Yahoo credentials — run setup_auth")
 
     async def _check_imessage(self) -> None:
-        chat_db = Path.home() / "Library" / "Messages" / "chat.db"
+        from subsystems.communications.imessage_client import IMESSAGE_DB
+
+        chat_db = IMESSAGE_DB
         if not chat_db.exists():
             self._set("imessage", "iMessage", CapabilityStatus.NOT_CONFIGURED,
-                      detail="chat.db not found — macOS only, Messages app must be set up")
+                      detail=f"chat.db not found at {chat_db}")
             return
         if os.access(chat_db, os.R_OK):
             self._set("imessage", "iMessage", CapabilityStatus.AVAILABLE)
@@ -355,7 +359,8 @@ class CapabilityRegistry:
                       detail="Full Disk Access not granted to this process")
 
     async def _check_whatsapp(self) -> None:
-        wa_db = Path.home() / "Library" / "Application Support" / "WhatsApp" / "ChatStorage.sqlite"
+        from subsystems.communications.whatsapp_client import WHATSAPP_DB
+        wa_db = WHATSAPP_DB
         export_dir = Path.home() / "Documents" / "WhatsApp Chats"
 
         if wa_db.exists():
@@ -407,3 +412,22 @@ class CapabilityRegistry:
     async def _check_memory(self) -> None:
         # Memory is always available — runs in-process with no external deps
         self._set("memory", "Memory", CapabilityStatus.AVAILABLE)
+
+    async def _check_local_filesystem(self) -> None:
+        from agent.local_filesystem_tools import allowed_roots
+
+        roots = [str(root) for root in allowed_roots()]
+        if roots:
+            self._set(
+                "local_files",
+                "Local Files",
+                CapabilityStatus.AVAILABLE,
+                detail=f"Read-only access within: {', '.join(roots)}",
+            )
+        else:
+            self._set(
+                "local_files",
+                "Local Files",
+                CapabilityStatus.NOT_CONFIGURED,
+                detail="No readable local filesystem roots detected",
+            )

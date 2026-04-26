@@ -13,8 +13,8 @@ def _make_core():
     config.LIFE_CONTEXT_PATH = "docs/LIFE_CONTEXT.md"
     config.OWNER_NAME = "Jack Chan"
     config.TIMEZONE = "UTC"
-    config.DEFAULT_LOCAL_MODEL = "hermes3:latest"
-    config.DEFAULT_FRONTIER_MODEL = "local/hermes3:latest"
+    config.DEFAULT_LOCAL_MODEL = "hermes-4.3-36b-tools:latest"
+    config.DEFAULT_FRONTIER_MODEL = "local/hermes-4.3-36b-tools:latest"
 
     with patch("agent.core.ModelClient"), \
          patch("agent.core.MemoryManager"), \

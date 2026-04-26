@@ -8,8 +8,9 @@ Follows the same pattern as web_search.py / routing.py:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import structlog
 from agent.query_intents import CALENDAR_QUERY_TERMS, infer_calendar_days, is_source_query
@@ -120,18 +121,24 @@ def _get_client(account: str | None = None):
 
 
 def _get_all_clients():
-    """Return a CalendarClient for every authorized Google account."""
+    """Return (clients, skipped_warnings) for every authorized Google account."""
     from subsystems.calendar.auth import list_authorized_accounts
     from subsystems.calendar.client import CalendarClient
     accounts = list_authorized_accounts()
     clients = []
+    skipped: list[str] = []
     for acc in accounts:
         account_arg = None if acc == "default" else acc
         try:
             clients.append((acc, CalendarClient(account=account_arg)))
         except Exception as e:
             logger.warning("calendar_account_skipped", account=acc, error=str(e))
-    return clients
+            err_str = str(e)
+            if "invalid_grant" in err_str:
+                skipped.append(f"{acc}: token expired — re-run setup_auth to reconnect")
+            else:
+                skipped.append(f"{acc}: {e}")
+    return clients, skipped
 
 
 def _calendar_label(cal: dict[str, Any]) -> str:
@@ -146,6 +153,8 @@ def _format_event(event: dict[str, Any], calendars: list[dict[str, Any]]) -> str
     try:
         if "T" in dt_str:
             dt = datetime.fromisoformat(dt_str)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone()
             time_str = dt.strftime("%-I:%M %p %Z").strip() or dt.strftime("%-I:%M %p")
             date_str = dt.strftime("%a %b %-d")
         else:
@@ -183,9 +192,12 @@ async def execute_get_upcoming_events(args: dict) -> dict:
     cal_filter = (args.get("calendar_filter") or "").lower()
 
     try:
-        account_clients = await asyncio.to_thread(_get_all_clients)
+        account_clients, skipped = await asyncio.to_thread(_get_all_clients)
         if not account_clients:
-            return {"error": "No authorized Google accounts found. Run setup_auth.py first."}
+            msg = "No authorized Google accounts found. Run setup_auth.py first."
+            if skipped:
+                msg += " (" + "; ".join(skipped) + ")"
+            return {"error": msg}
 
         all_events: list[dict[str, Any]] = []
         all_calendars: list[dict[str, Any]] = []
@@ -215,15 +227,21 @@ async def execute_get_upcoming_events(args: dict) -> dict:
         all_events.sort(key=_event_sort_key)
 
         if not all_events:
-            return {"events": [], "summary": f"No events in the next {days} days."}
+            result: dict = {"events": [], "summary": f"No events in the next {days} days."}
+            if skipped:
+                result["warnings"] = skipped
+            return result
 
         formatted = [_format_event(e, all_calendars) for e in all_events]
-        return {
+        result = {
             "events": formatted,
             "count": len(all_events),
             "days": days,
             "summary": f"{len(all_events)} event(s) in the next {days} days.",
         }
+        if skipped:
+            result["warnings"] = skipped
+        return result
     except FileNotFoundError as e:
         return {"error": str(e)}
     except Exception as e:
@@ -259,9 +277,12 @@ async def execute_get_calendar_events_range(args: dict) -> dict:
         return {"error": f"Invalid date format: {e}. Use ISO 8601 (e.g. '2024-10-01')."}
 
     try:
-        account_clients = await asyncio.to_thread(_get_all_clients)
+        account_clients, skipped = await asyncio.to_thread(_get_all_clients)
         if not account_clients:
-            return {"error": "No authorized Google accounts found. Run setup_auth.py first."}
+            msg = "No authorized Google accounts found. Run setup_auth.py first."
+            if skipped:
+                msg += " (" + "; ".join(skipped) + ")"
+            return {"error": msg}
 
         all_events: list[dict[str, Any]] = []
         all_calendars: list[dict[str, Any]] = []
@@ -290,19 +311,25 @@ async def execute_get_calendar_events_range(args: dict) -> dict:
         all_events.sort(key=_event_sort_key)
 
         if not all_events:
-            return {
+            result: dict = {
                 "events": [],
                 "summary": f"No events found between {start_str} and {end_str}.",
             }
+            if skipped:
+                result["warnings"] = skipped
+            return result
 
         formatted = [_format_event(e, all_calendars) for e in all_events]
-        return {
+        result = {
             "events": formatted,
             "count": len(all_events),
             "start_date": start_str,
             "end_date": end_str,
             "summary": f"{len(all_events)} event(s) between {start_str} and {end_str}.",
         }
+        if skipped:
+            result["warnings"] = skipped
+        return result
     except FileNotFoundError as e:
         return {"error": str(e)}
     except Exception as e:
@@ -312,7 +339,7 @@ async def execute_get_calendar_events_range(args: dict) -> dict:
 
 async def execute_list_calendars() -> dict:
     try:
-        account_clients = await asyncio.to_thread(_get_all_clients)
+        account_clients, skipped = await asyncio.to_thread(_get_all_clients)
         result = []
         for acc_name, client in account_clients:
             calendars = await asyncio.to_thread(client.list_calendars)
@@ -328,13 +355,20 @@ async def execute_list_calendars() -> dict:
                 if cal["id"] in _id_labels:
                     entry["label"] = _id_labels[cal["id"]]
                 result.append(entry)
-        return {"calendars": result, "count": len(result)}
+        out: dict = {"calendars": result, "count": len(result)}
+        if skipped:
+            out["warnings"] = skipped
+        return out
     except Exception as e:
         logger.error("list_calendars_failed", error=str(e))
         return {"error": f"Could not list calendars: {e}"}
 
 
-async def maybe_get_calendar_context(user_message: str) -> str:
+async def _maybe_get_calendar_context(
+    user_message: str,
+    *,
+    timezone_name: str | None,
+) -> str:
     """Proactively inject upcoming events when the query is schedule-related."""
     if not is_source_query(user_message, CALENDAR_QUERY_TERMS, extra_terms=("today", "tomorrow", "this week", "next week", "coming up")):
         return ""
@@ -343,13 +377,47 @@ async def maybe_get_calendar_context(user_message: str) -> str:
     days = infer_calendar_days(user_message, default=7)
 
     try:
-        result = await execute_get_upcoming_events({"days": days})
+        normalized = user_message.lower()
+        tz = ZoneInfo(timezone_name) if timezone_name else datetime.now().astimezone().tzinfo
+        now_local = datetime.now(tz)
+        if "today" in normalized or "tonight" in normalized:
+            start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1) - timedelta(seconds=1)
+            result = await execute_get_calendar_events_range(
+                {"start_date": start.isoformat(), "end_date": end.isoformat()}
+            )
+            heading = "Calendar events for today:"
+        elif "tomorrow" in normalized:
+            start = (now_local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=1) - timedelta(seconds=1)
+            result = await execute_get_calendar_events_range(
+                {"start_date": start.isoformat(), "end_date": end.isoformat()}
+            )
+            heading = "Calendar events for tomorrow:"
+        else:
+            start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = start + timedelta(days=days) - timedelta(seconds=1)
+            result = await execute_get_calendar_events_range(
+                {"start_date": start.isoformat(), "end_date": end.isoformat()}
+            )
+            heading = f"Calendar events for the next {days} day(s), including today:"
         if "error" in result or not result.get("events"):
             return ""
-        lines = [f"Upcoming calendar events (next {days} day(s)):"]
+        lines = [heading]
         lines.extend(result["events"])
         logger.debug("calendar_context_injected", count=result["count"])
         return "\n".join(lines)
     except Exception as e:
         logger.warning("calendar_proactive_failed", error=str(e))
         return ""
+
+
+async def maybe_get_calendar_context(
+    user_message: str,
+    *,
+    timezone_name: str | None = None,
+) -> str:
+    return await _maybe_get_calendar_context(
+        user_message,
+        timezone_name=timezone_name,
+    )

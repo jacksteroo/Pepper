@@ -271,6 +271,34 @@ class MemoryManager:
 
         return "\n".join(lines)
 
+    # ─── Admin ────────────────────────────────────────────────────────────────
+
+    async def reset_all(self) -> dict:
+        """Wipe working memory, all memory_events rows, and all conversations rows."""
+        self._working.clear()
+        if not self._db_factory:
+            return {"ok": True, "message": "Working memory cleared (no DB connected)"}
+        try:
+            async with self._db_factory() as session:
+                result_mem = await session.execute(delete(MemoryEvent))
+                from agent.models import Conversation
+                result_conv = await session.execute(delete(Conversation))
+                session.add(AuditLog(
+                    event_type="memory_reset",
+                    details="Full memory wipe requested by owner"
+                ))
+                await session.commit()
+            deleted_mem = result_mem.rowcount
+            deleted_conv = result_conv.rowcount
+            logger.info("memory_reset", memory_events=deleted_mem, conversations=deleted_conv)
+            return {
+                "ok": True,
+                "message": f"Wiped {deleted_mem} memory events and {deleted_conv} conversation records.",
+            }
+        except Exception as e:
+            logger.error("memory_reset_failed", error=str(e))
+            return {"error": str(e)}
+
     # ─── Private Helpers ──────────────────────────────────────────────────────
 
     async def _score_importance(self, content: str) -> float:

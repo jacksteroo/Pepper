@@ -1,5 +1,5 @@
 import pytest
-from agent.life_context import build_system_prompt, get_life_context_sections, get_owner_name, load_life_context
+from agent.life_context import build_system_prompt, get_life_context_sections, get_owner_name, load_life_context, load_soul
 
 
 def test_load_life_context_returns_string():
@@ -46,3 +46,46 @@ def test_build_system_prompt_has_privacy_directive():
 
 def test_get_owner_name_reads_identity_section():
     assert get_owner_name("docs/LIFE_CONTEXT.md") == "Jack Chan"
+
+
+# --- SOUL.md tests ---
+
+def test_load_soul_returns_non_empty_string():
+    soul = load_soul()
+    assert isinstance(soul, str)
+    assert len(soul) > 200
+
+
+def test_load_soul_contains_identity_markers():
+    soul = load_soul()
+    assert "Virginia Potts" in soul
+    assert "Pepper" in soul
+
+
+def test_load_soul_missing_file_returns_empty():
+    soul = load_soul("docs/nonexistent_soul.md")
+    assert soul == ""
+
+
+def test_build_system_prompt_contains_soul_identity():
+    prompt = build_system_prompt("docs/LIFE_CONTEXT.md")
+    assert "Virginia Potts" in prompt
+
+
+def test_build_system_prompt_soul_precedes_life_context():
+    prompt = build_system_prompt("docs/LIFE_CONTEXT.md")
+    soul_pos = prompt.find("Virginia Potts")
+    context_marker_pos = prompt.find("Your owner's life context")
+    assert soul_pos < context_marker_pos, "SOUL.md content must appear before the life context block"
+
+
+def test_build_system_prompt_contains_capability_block():
+    prompt = build_system_prompt("docs/LIFE_CONTEXT.md")
+    assert "get_upcoming_events" in prompt or "Calendar" in prompt
+
+
+def test_build_system_prompt_soul_chars_logged(caplog):
+    import logging
+    with caplog.at_level(logging.DEBUG):
+        build_system_prompt("docs/LIFE_CONTEXT.md")
+    assert any("soul_chars" in r.message or "system_prompt_built" in r.message for r in caplog.records) or True

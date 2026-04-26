@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 
 def make_mock_config(context_tokens: int = 8192):
     cfg = MagicMock()
-    cfg.DEFAULT_LOCAL_MODEL = "hermes3:latest"
+    cfg.DEFAULT_LOCAL_MODEL = "hermes-4.3-36b-tools:latest"
     cfg.MODEL_CONTEXT_TOKENS = context_tokens
     return cfg
 
@@ -264,7 +264,7 @@ async def test_llm_local_only_overrides_frontier_model():
 
     cfg = MagicMock()
     cfg.ANTHROPIC_API_KEY = None  # no Anthropic client
-    cfg.DEFAULT_LOCAL_MODEL = "hermes3:latest"
+    cfg.DEFAULT_LOCAL_MODEL = "hermes-4.3-36b-tools:latest"
     cfg.OLLAMA_BASE_URL = "http://localhost:11434"
 
     client = ModelClient(cfg)
@@ -280,7 +280,7 @@ async def test_llm_local_only_overrides_frontier_model():
 
         mock_ollama.assert_called_once()
         actual_model = mock_ollama.call_args.args[0]
-        assert actual_model == "hermes3:latest", (
+        assert actual_model == "hermes-4.3-36b-tools:latest", (
             f"local_only=True did not override to local model, got: {actual_model!r}"
         )
 
@@ -292,7 +292,7 @@ async def test_llm_local_only_false_allows_frontier():
 
     cfg = MagicMock()
     cfg.ANTHROPIC_API_KEY = None
-    cfg.DEFAULT_LOCAL_MODEL = "hermes3:latest"
+    cfg.DEFAULT_LOCAL_MODEL = "hermes-4.3-36b-tools:latest"
     cfg.OLLAMA_BASE_URL = "http://localhost:11434"
 
     client = ModelClient(cfg)
@@ -302,12 +302,12 @@ async def test_llm_local_only_false_allows_frontier():
 
         await client.chat(
             messages=[{"role": "user", "content": "hi"}],
-            model="local/hermes3:latest",
+            model="local/hermes-4.3-36b-tools:latest",
             local_only=False,
         )
 
         mock_ollama.assert_called_once()
-        assert mock_ollama.call_args.args[0] == "hermes3:latest"
+        assert mock_ollama.call_args.args[0] == "hermes-4.3-36b-tools:latest"
 
 
 # ── Recall memory preservation ────────────────────────────────────────────────

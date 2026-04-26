@@ -14,14 +14,17 @@ You must stop after **3 fix attempts** regardless of outcome. Report your findin
 
 ## Context You Must Read First
 
-Before doing anything else, read all of these files in full:
+Read these files **before picking a question**:
 
 1. `./AGENTS.md` — top-level agent instructions for this repository.
 2. `./CLAUDE.md` — repository conventions, architectural boundaries, privacy rules, and development guardrails (AGENTS.md defers to this).
 3. `./docs/CONTINUOUS_IMPROVEMENT_PLAN.md` — the operating improvement plan: gap matrix, tracks, metrics, and the operating loop (Steps 1–8).
-4. `./docs/LIFE_CONTEXT.md` — the owner's complete life context: family, travel, work, open loops, and what Pepper should and should never do.
 
-Use the CONTINUOUS_IMPROVEMENT_PLAN.md to guide your fault taxonomy and fix approach. Use LIFE_CONTEXT.md as the ground truth for what a correct, grounded Pepper response looks like.
+Read this file **only after you have already chosen and sent the question** (Step 1), and only for evaluation purposes (Step 2 onward):
+
+4. `./docs/LIFE_CONTEXT.md` — the owner's complete life context. Use it as ground truth when checking whether Pepper's response is accurate and grounded. **Do not read it before picking the question** — doing so will bias your selection toward owner-specific scenarios and defeat the randomization goal.
+
+Use CONTINUOUS_IMPROVEMENT_PLAN.md to guide your fault taxonomy and fix approach. Use LIFE_CONTEXT.md to verify factual correctness of Pepper's responses.
 
 ---
 
@@ -29,43 +32,50 @@ Use the CONTINUOUS_IMPROVEMENT_PLAN.md to guide your fault taxonomy and fix appr
 
 Pick **one question** that the owner would plausibly ask Pepper right now. The question:
 
-- may or may not be similar to real open loops or active situations in LIFE_CONTEXT.md (upcoming trip lodging, college tours, travel for a child, college application deadlines, my spouse's career, investments, meal planning, etc.)
+- drawn from the category list below — not from LIFE_CONTEXT.md, which you have not read yet
 - must feel like something the owner would actually send — direct, short, practical
 - must test a meaningful capability: calendar awareness, commitment tracking, travel logistics, family triage, research, or proactive surfacing
+
+**Randomization rule (temperature ≈ 0.7):** You must actively vary your selection across runs. To do this:
+
+1. Use the current minute or second value from the system clock (via a bash `date` call: `date +%S`) as a seed to pseudo-randomly select the category and question index. Do this *before* reading the question list — let the number drive the pick, not your intuition.
+2. Do not default to Travel, Work, or Proactive. Rotate through all categories. Finance, Meal Planning, Health, Partner, and Communications are equally valid stress-test targets.
+3. If your instinct is to pick a short, easy question — override it. Prefer questions that exercise tool calls, multi-step reasoning, or cross-subsystem data (e.g. calendar + email, or commitments + family logistics).
+4. Occasionally (when the seed is odd) rephrase the chosen question slightly in your own words while preserving the intent — this prevents over-fitting to the exact phrasing in the list.
 
 Good example questions:
 
 ### Travel & Logistics
 
-- "What's left to confirm for the summer trip?"
+- "What's left to confirm for the upcoming trip?"
 - "Is my child's flight sorted?"
 - "Any updates received via emails or messages on my upcoming trip?"
-- "What hotel are we in for the trip to the East Coast?"
+- "What hotel are we staying at for the next trip?"
 - "Do we have a rental car for my upcoming trip?"
 - "When does my child leave and when do they get back?"
-- "What's the drive time between the two campus visits?"
-- "Have I booked anything for the next leg of the sports tour?"
+- "What's the drive time between the two stops on the trip?"
+- "Have I booked anything for the next leg of the trip?"
 - "What are the check-in times for our hotel?"
 - "What's the status of the lodging for the trip next month?"
-- "Do I need to book anything for the Europe trip before end of month?"
+- "Do I need to book anything before end of month?"
 - "What's the earliest flight back on Sunday?"
 - "Are the kids' passports still valid for the summer?"
 - "Did I sort ground transport for the trip?"
-- "What's open on the Asia trip itinerary that still needs booking?"
+- "What's still open on the upcoming itinerary that needs booking?"
 
 ### Family & Kids
 
 - "What does my child have going on this week?"
-- "What pre-college program deadlines are coming up?"
-- "Has my child submitted his summer program applications yet?"
-- "What are the deadlines I need to track for my child's college stuff?"
+- "What program or activity deadlines are coming up for the kids?"
+- "Has my child submitted their applications yet?"
+- "What are the deadlines I need to track for my child's upcoming programs?"
 - "What's on the kids' schedule this weekend?"
-- "What's the status of the Uber Teen setup for my child's trip?"
+- "What logistics do I still need to sort out for my child's trip?"
 - "What does my child have going on this month?"
 - "Any family commitments I'm forgetting about this week?"
 - "What school events are coming up in the next two weeks?"
 - "Is there anything I need to do to help my child's grades?"
-- "What summer programs is my child still waiting to hear back from?"
+- "What is my child still waiting to hear back from?"
 - "When is the next school break and do we have plans?"
 - "What did I say I'd do for the kids this weekend?"
 - "Any commitments to the kids I haven't followed through on?"
@@ -91,14 +101,14 @@ Good example questions:
 
 ### Partner
 
-- "What's the status of my partner's job search?"
-- "What companies is my partner talking to right now?"
-- "Has my partner heard back from any of their applications?"
-- "What can I do to support my partner's career transition this week?"
+- "What's going on with my partner this week that I should know about?"
 - "Is there anything I should follow up on for my partner?"
 - "What does my partner's schedule look like this week?"
-- "Did my partner have any interviews recently that I should follow up on?"
 - "What commitments do I have around supporting my partner this month?"
+- "Is there anything time-sensitive I need to do for my partner?"
+- "What did I say I'd help my partner with that I haven't done yet?"
+- "Are there any upcoming events or plans involving my partner I should be aware of?"
+- "What's the one thing I could do this week to make my partner's life easier?"
 
 ### Finance & Crypto
 
@@ -131,7 +141,7 @@ Good example questions:
 - "What health habits have I been slipping on?"
 - "How's my recovery looking based on recent data?"
 - "Should I work out today based on how I've been sleeping?"
-- "What does my Oura data say about this week?"
+- "What does my wearable data say about this week?"
 - "Am I getting enough sleep on average this month?"
 
 ### Communications & Follow-ups

@@ -24,9 +24,9 @@ LLM capabilities are converging toward zero cost. The irreplaceable investment i
 
 **Current recommended models** (update as better models release):
 
-- `nous-hermes2:34b` — deep reasoning model for background agents and complex local tasks
+- `hermes-4.3-36b-tools:latest` — deep reasoning model for background agents and complex local tasks
 - `llama3.3:70b` — strong alternative, very capable
-- `nous-hermes2:34b` — specifically fine-tuned for agentic tool calling; preferred for Pepper Core orchestration
+- `hermes-4.3-36b-tools:latest` — specifically fine-tuned for agentic tool calling; preferred for Pepper Core orchestration
 - `nomic-embed-text` — local embeddings for vector search
 
 **Hardware baseline**:
@@ -107,7 +107,7 @@ class ModelClient:
         return self._local_embed(text)
 ```
 
-Swapping from `nous-hermes2:34b` to a future `hermes4:100b` is one config line. The rest of Pepper doesn't change.
+Swapping from `hermes-4.3-36b-tools:latest` to a future `hermes4:100b` is one config line. The rest of Pepper doesn't change.
 
 ---
 

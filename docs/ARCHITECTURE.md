@@ -249,8 +249,8 @@ Two model tiers, separated by data sensitivity:
 - iMessage reading, email parsing, health data, financial data
 - Routine retrieval, summarization, all tool calling
 - Runs continuously, no cost, no data exfiltration
-- Current default model: **nous-hermes2:34b** (configurable via `DEFAULT_LOCAL_MODEL` in `.env`)
-- Other supported: nous-hermes2:34b, Llama 3.3 70B
+- Current default model: **hermes-4.3-36b-tools:latest** (configurable via `DEFAULT_LOCAL_MODEL` in `.env`)
+- Other supported: hermes-4.3-36b-tools:latest, Llama 3.3 70B
 
 ### Frontier Tier (Claude API) — Optional
 
@@ -276,7 +276,7 @@ All model calls go through a single interface that mirrors Ollama's OpenAI-compa
 ```python
 # All model calls look like this regardless of which model runs them
 response = llm.chat(
-    model=config.model,      # "nous-hermes2:34b" or "claude-sonnet-4-6" 
+    model=config.model,      # "hermes-4.3-36b-tools:latest" or "claude-sonnet-4-6" 
     messages=messages,
     tools=tools
 )

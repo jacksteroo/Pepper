@@ -110,6 +110,10 @@ def test_infer_imessage_source():
     assert "imessage" in _infer_target_sources("Any texts from mom?")
 
 
+def test_infer_no_imessage_source_for_context():
+    assert "imessage" not in _infer_target_sources("what's my life context?")
+
+
 def test_infer_whatsapp_source():
     assert "whatsapp" in _infer_target_sources("Check my WhatsApp groups")
 
@@ -165,6 +169,13 @@ def test_specific_capability_check(router, message, expected_source):
     assert d.intent_type == IntentType.CAPABILITY_CHECK
     assert d.action_mode == ActionMode.ANSWER_FROM_CONTEXT
     assert expected_source in d.target_sources or d.target_sources == ["unknown"]
+
+
+def test_filesystem_capability_check(router):
+    d = router.route("Do you have access to docs/LIFE_CONTEXT.md?")
+    assert d.intent_type == IntentType.CAPABILITY_CHECK
+    assert d.target_sources == ["filesystem"]
+    assert d.action_mode == ActionMode.ANSWER_FROM_CONTEXT
 
 
 # ── Cross-source triage ────────────────────────────────────────────────────────
@@ -236,6 +247,7 @@ def test_schedule_lookup(router, message):
     "Who needs a response from me?",
     "What needs a reply?",
     "What do I owe people?",
+    "What's on my to-do list?",
 ])
 def test_action_items_routing(router, message):
     d = router.route(message)
@@ -274,6 +286,13 @@ def test_conversation_lookup_routing(router, message):
         IntentType.SCHEDULE_LOOKUP,
         IntentType.ACTION_ITEMS,
     )
+    assert d.action_mode == ActionMode.CALL_TOOLS
+
+
+def test_filesystem_lookup_routing(router):
+    d = router.route("What is in /data/messages folder?")
+    assert d.intent_type == IntentType.CONVERSATION_LOOKUP
+    assert d.target_sources == ["filesystem"]
     assert d.action_mode == ActionMode.CALL_TOOLS
 
 
@@ -386,7 +405,7 @@ def test_validate_prompt_tool_references_no_stale_names():
         "get_contact_profile", "find_quiet_contacts", "search_contacts",
         "get_comms_health_summary", "get_overdue_responses",
         "get_relationship_balance_report",
-        "search_images", "search_web", "get_driving_time",
+        "search_images", "search_web", "get_driving_time", "inspect_local_path",
     }
 
     block = build_capability_block()
