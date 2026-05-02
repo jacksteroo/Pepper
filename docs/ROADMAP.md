@@ -8,6 +8,7 @@ The current sequencing of this roadmap is set by ratified ADRs. When the sequenc
 - [ADR-0002](adr/0002-fifth-anchoring-principle-compounding-capability.md) — fifth anchoring principle: the system improves itself in response to its own behaviour, within human-reviewable bounds.
 - [ADR-0003](adr/0003-layer-2-is-the-active-surface.md) — Layer 2 (Intelligence + agent runtime) is the active surface for the next two sprints; Layer 1 is in maintenance.
 - [ADR-0004](adr/0004-introduce-agents-directory.md) — `agents/` directory parallel to `subsystems/`, with the same isolation rule, as the structural home for cognitive functions (reflector, monitor, researcher) the substrate phase will introduce.
+- [ADR-0011](adr/0011-layer-3-thin-clients-tailscale.md) — Layer 3 master ADR: thin clients (Capacitor mobile + Swift/WKWebView macOS) on a Tailscale-accessible FastAPI server; home server primary, operator-owned VPS as fallback. Retires the embedded-PostgreSQL desktop direction. Master for Epic 08 (issue #70).
 
 See [docs/adr/](adr/) for the full list.
 
@@ -23,9 +24,9 @@ Deferred capability work (knowledge layer, health & finance, maintenance & secur
 
 The **People subsystem** is also deferred. The criteria for un-deferring it — both the concrete usage signals that would justify building it and the out-of-scope signals that should not — are captured in [people-subsystem-criteria.md](people-subsystem-criteria.md). That document is the canonical answer to "should we build People?" so the question does not get re-litigated each quarter.
 
-**Next platform direction**: a notarized macOS desktop app that wraps the existing React UI in a Swift shell, embeds PostgreSQL + pgvector locally, and removes Docker from the end-user experience. See [MACOS_DESKTOP_APP_PLAN.md](MACOS_DESKTOP_APP_PLAN.md).
+**Next platform direction**: thin clients (Capacitor mobile + Swift/WKWebView macOS) over a Tailscale tailnet against a FastAPI server, with a home-server-primary / operator-owned-VPS-fallback posture. The earlier embedded-PostgreSQL desktop plan in [MACOS_DESKTOP_APP_PLAN.md](MACOS_DESKTOP_APP_PLAN.md) is superseded by this direction. Tracked in Epic 08 (issue #70); master decision is ADR-0011 (in flight).
 
-**Near-term auth/platform work**: formalize credential lifecycle behavior across Docker today and the macOS app later:
+**Near-term auth/platform work**: formalize credential lifecycle behavior across Docker today and the thin-client / Tailscale posture later:
 
 - restart-safe auth (no unnecessary reauth on backend/app/container restart)
 - explicit account auth states (`connected`, `needs_reauth`, `needs_local_login`, `upgrade_required`, etc.)

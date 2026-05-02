@@ -1,5 +1,9 @@
 # Pepper — macOS Desktop App Plan
 
+> **Status: Superseded** (2026-05-02). The embedded-PostgreSQL-on-macOS-desktop direction described below is no longer the plan. Layer 3 has been re-scoped to a thin-client + server-heavy posture: a Swift/WKWebView macOS shell and a Capacitor mobile wrapper reach a FastAPI server over a Tailscale tailnet (home server primary, operator-owned VPS as fallback). The macOS shell is retained, but it does **not** bundle PostgreSQL.
+>
+> This document is retained as historical context. See Epic 08 (issue #70) and the master ADR-0011 (in flight) for the live plan.
+
 ## Goal
 
 Build a first-class macOS desktop app for Pepper that:

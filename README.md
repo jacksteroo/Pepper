@@ -167,7 +167,7 @@ Two LLM tiers:
 | **Phase 3** | Runtime — parallel tool execution, context compression, classified error handling | ✅ Complete |
 | **Phase 4** | Skill System — SKILL.md structured workflows, self-improving via user-approved diffs | Planned |
 | **Phase 5** | MCP Integration — subsystems as MCP servers, external MCP tools (GitHub, Linear, Obsidian) | Planned |
-| **macOS App** | Desktop app — Swift shell + WKWebView, embedded PostgreSQL, no Docker | Planned |
+| **Layer 3** | Mobile + macOS thin clients on Tailscale-accessible server (FastAPI + long polling); home server primary, operator-owned VPS as fallback. See Epic 08 (issue #70). | Planned |
 
 ---
 

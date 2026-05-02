@@ -30,7 +30,7 @@ Per [ADR-0003](adr/0003-layer-2-is-the-active-surface.md), Layer 2 is the **acti
 
 ### Layer 3 — Presentation
 
-How Pepper meets the operator. Telegram is the primary interface today; the local React + Vite web app is secondary; a notarized macOS desktop app is the next platform direction (see [`MACOS_DESKTOP_APP_PLAN.md`](MACOS_DESKTOP_APP_PLAN.md)). Voice is on the wishlist.
+How Pepper meets the operator. Telegram is the primary interface today; the local React + Vite web app is secondary. The next platform direction is a **thin-client + server-heavy** posture: a Capacitor mobile wrapper and a Swift/WKWebView macOS shell, both reaching a FastAPI server over a Tailscale tailnet, home server primary with an operator-owned VPS as fallback. See Epic 08 (issue #70) and the master ADR-0011 (in flight). The earlier embedded-PostgreSQL desktop plan in [`MACOS_DESKTOP_APP_PLAN.md`](MACOS_DESKTOP_APP_PLAN.md) is superseded by this direction. Voice is on the wishlist.
 
 Layer 3 is in steady state. A better presentation layer over a confused agent would be a demo, not a tool, so Layer 3 work is not the active surface during the Layer 2 window.
 
