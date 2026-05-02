@@ -91,6 +91,30 @@ async def init_db(config=None) -> None:
                 "WITH (m=16, ef_construction=64)"
             )
         )
+        # Epic 02 (#27) — BM25 keyword search over memory_events.content via
+        # a STORED generated tsvector + GIN. Generated columns auto-backfill
+        # existing rows on add, so no separate backfill script is required.
+        # Stays in the same Postgres DB as the embeddings — RAW_PERSONAL
+        # boundary is unchanged, retention/compression policy untouched.
+        #
+        # Note: ADD COLUMN ... GENERATED ... STORED takes ACCESS EXCLUSIVE
+        # while the column is materialised. For Pepper's single-user local
+        # DB at the row counts we operate at this is sub-second; on a
+        # large table it would block writers — re-read this if memory_events
+        # ever grows by orders of magnitude.
+        await conn.execute(
+            text(
+                "ALTER TABLE memory_events "
+                "ADD COLUMN IF NOT EXISTS content_tsv tsvector "
+                "GENERATED ALWAYS AS (to_tsvector('english', content)) STORED"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_memory_events_content_tsv "
+                "ON memory_events USING GIN (content_tsv)"
+            )
+        )
         await conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS idx_conversations_embedding "

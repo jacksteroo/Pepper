@@ -1,5 +1,8 @@
-import pytest
+from datetime import datetime as _dt
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from agent.memory import MemoryManager
 
 
@@ -115,3 +118,133 @@ async def test_build_context_no_db_returns_empty():
     mm = MemoryManager(llm_client=None, db_session_factory=None)
     result = await mm.build_context_for_query("test")
     assert result == ""
+
+
+# ─── BM25 keyword search (#27) ────────────────────────────────────────────
+
+
+def _make_session_factory_returning(rows: list[dict]):
+    """Build a fake async-context-manager session factory that records the
+    SQL it was given and returns the supplied mapping rows."""
+    captured: dict = {}
+
+    class _FakeMappings:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    class _FakeResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def mappings(self):
+            return _FakeMappings(self._rows)
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def execute(self, sql, params=None):
+            captured["sql"] = str(sql)
+            captured["params"] = params or {}
+            return _FakeResult(rows)
+
+    def factory():
+        return _FakeSession()
+
+    return factory, captured
+
+
+@pytest.mark.asyncio
+async def test_bm25_search_no_db_returns_empty():
+    mm = MemoryManager(db_session_factory=None)
+    assert await mm.search_bm25("anything") == []
+
+
+@pytest.mark.asyncio
+async def test_bm25_search_empty_query_returns_empty():
+    factory, _ = _make_session_factory_returning([])
+    mm = MemoryManager(db_session_factory=factory)
+    assert await mm.search_bm25("") == []
+    assert await mm.search_bm25("   ") == []
+
+
+@pytest.mark.asyncio
+async def test_bm25_search_uses_tsvector_and_ts_rank_cd():
+    """SQL must hit `content_tsv` with `plainto_tsquery` and rank by
+    `ts_rank_cd` so the GIN index is exercised and the scoring is
+    cover-density (proximity-aware), not plain ts_rank."""
+    factory, captured = _make_session_factory_returning([])
+    mm = MemoryManager(db_session_factory=factory)
+    await mm.search_bm25("matthew design studio", limit=5)
+    sql = captured["sql"].lower()
+    assert "content_tsv" in sql
+    assert "plainto_tsquery" in sql
+    assert "ts_rank_cd" in sql
+    assert "@@" in sql
+    assert "type = 'recall'" in sql
+    assert captured["params"] == {"q": "matthew design studio", "k": 5}
+
+
+@pytest.mark.asyncio
+async def test_bm25_search_normalises_rows_to_dicts():
+    rows = [
+        {
+            "id": 4,
+            "content": "Matthew started a new role at the design studio.",
+            "importance_score": 0.7,
+            "created_at": _dt(2026, 4, 25, 12, 0, 0),
+            "score": 0.42,
+        },
+        {
+            "id": 5,
+            "content": "Matthew shipped the onboarding redesign last week.",
+            "importance_score": 0.6,
+            "created_at": _dt(2026, 4, 30, 9, 0, 0),
+            "score": 0.21,
+        },
+    ]
+    factory, _ = _make_session_factory_returning(rows)
+    mm = MemoryManager(db_session_factory=factory)
+    out = await mm.search_bm25("matthew", limit=2)
+    assert [r["id"] for r in out] == [4, 5]
+    assert out[0]["score"] == pytest.approx(0.42)
+    # ISO-8601 string makes results JSON-serialisable for traces / inspector.
+    assert out[0]["created_at"] == "2026-04-25T12:00:00"
+    assert all(isinstance(r["importance_score"], float) for r in out)
+
+
+@pytest.mark.asyncio
+async def test_bm25_search_clamps_invalid_limit():
+    """A non-positive limit reaches Postgres as `LIMIT -1` which errors;
+    clamp it to the default rather than fault."""
+    factory, captured = _make_session_factory_returning([])
+    mm = MemoryManager(db_session_factory=factory)
+    await mm.search_bm25("matthew", limit=-1)
+    assert captured["params"]["k"] == 10
+    await mm.search_bm25("matthew", limit=0)
+    assert captured["params"]["k"] == 10
+
+
+@pytest.mark.asyncio
+async def test_bm25_search_swallows_db_errors():
+    """Tools must return [] on transient DB errors rather than raising —
+    matches the contract used by every other MemoryManager search method."""
+
+    class _BoomSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def execute(self, sql, params=None):
+            raise RuntimeError("postgres exploded")
+
+    mm = MemoryManager(db_session_factory=lambda: _BoomSession())
+    assert await mm.search_bm25("matthew") == []
