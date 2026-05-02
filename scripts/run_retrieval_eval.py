@@ -61,13 +61,22 @@ def _render_markdown(report, mode: str, tag: str | None) -> str:
     return "\n".join(lines)
 
 
-async def _build_memory_retriever():
-    """Adapt MemoryManager.search_recall into the eval Retriever protocol.
+RETRIEVER_MODES = ("semantic", "bm25", "hybrid")
 
-    TODO(epic02): once #27 (BM25), #28 (RRF), and #29 (recency) land,
-    add a `--retriever-mode` argument and dispatch to the corresponding
-    MemoryManager method here so before/after deltas can be measured
-    without redeploying.
+
+async def _build_memory_retriever(retriever_mode: str):
+    """Adapt a `MemoryManager` method into the eval `Retriever` protocol.
+
+    `retriever_mode` selects which method dispatches the query:
+      - `semantic` → `search_recall` (with #29's recency tilt by default;
+        an entry's `time_window_days` override flows through).
+      - `bm25` → `search_bm25` (#27).
+      - `hybrid` → `search_hybrid` (#28; RRF over recency-adjusted
+        semantic + BM25).
+
+    Choosing the mode at the script level rather than per-entry lets the
+    same eval set produce comparable before/after numbers across the
+    Epic 02 sub-issues without redeploying or editing code.
     """
     from agent.config import settings  # noqa: WPS433
     from agent.db import get_session_factory, init_db
@@ -78,23 +87,33 @@ async def _build_memory_retriever():
     llm = ModelClient(settings)
     mm = MemoryManager(llm_client=llm, db_session_factory=get_session_factory())
 
-    # Use the eval entry's `time_window_days` override if present, otherwise
-    # let MemoryManager.search_recall apply its default τ=30 (post-#29).
-    # Sentinel "use entry default" is `_NO_OVERRIDE` because `None` is a
-    # valid value (means "disable recency entirely" — the "ever" override).
-    _NO_OVERRIDE = object()
+    if retriever_mode == "bm25":
+        async def retrieve(eval_query, k: int) -> list[int]:
+            results = await mm.search_bm25(eval_query.query, limit=k)
+            return [int(r["id"]) for r in results]
 
-    async def retrieve(eval_query, k: int) -> list[int]:
-        kwargs: dict = {"limit": k}
-        if eval_query.time_window_days is not None:
-            kwargs["time_window_days"] = eval_query.time_window_days
-        results = await mm.search_recall(eval_query.query, **kwargs)
-        return [int(r["id"]) for r in results]
+    elif retriever_mode == "hybrid":
+        async def retrieve(eval_query, k: int) -> list[int]:
+            kwargs: dict = {"limit": k}
+            if eval_query.time_window_days is not None:
+                kwargs["time_window_days"] = eval_query.time_window_days
+            results = await mm.search_hybrid(eval_query.query, **kwargs)
+            return [int(r["id"]) for r in results]
+
+    else:  # "semantic"
+        async def retrieve(eval_query, k: int) -> list[int]:
+            kwargs: dict = {"limit": k}
+            if eval_query.time_window_days is not None:
+                kwargs["time_window_days"] = eval_query.time_window_days
+            results = await mm.search_recall(eval_query.query, **kwargs)
+            return [int(r["id"]) for r in results]
 
     return retrieve
 
 
-async def _run(mode: str, tag: str | None, threshold_pp: float) -> int:
+async def _run(
+    mode: str, tag: str | None, threshold_pp: float, retriever_mode: str
+) -> int:
     from agent.tests.retrieval_eval import compare_to_baseline, load_eval_set, run_eval
 
     if not EVAL_SET_PATH.exists():
@@ -106,7 +125,7 @@ async def _run(mode: str, tag: str | None, threshold_pp: float) -> int:
         return 2
 
     eval_set = load_eval_set(EVAL_SET_PATH)
-    retriever = await _build_memory_retriever()
+    retriever = await _build_memory_retriever(retriever_mode)
     report = await run_eval(eval_set, retriever)
 
     EVAL_RESULTS_DIR.mkdir(exist_ok=True)
@@ -158,6 +177,17 @@ def main() -> int:
         default=DEFAULT_GATE_THRESHOLD_PP,
         help="Recall@5 lift in percentage points required to pass --mode gate",
     )
+    parser.add_argument(
+        "--retriever-mode",
+        choices=RETRIEVER_MODES,
+        default="semantic",
+        help=(
+            "which MemoryManager method dispatches the query: "
+            "semantic (search_recall, default — also the baseline path), "
+            "bm25 (search_bm25, #27), hybrid (search_hybrid, #28 — RRF "
+            "over recency-adjusted semantic + BM25)"
+        ),
+    )
     args = parser.parse_args()
     if args.tag is not None and not _TAG_RE.match(args.tag):
         print(
@@ -167,7 +197,9 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    return asyncio.run(_run(args.mode, args.tag, args.threshold_pp))
+    return asyncio.run(
+        _run(args.mode, args.tag, args.threshold_pp, args.retriever_mode)
+    )
 
 
 if __name__ == "__main__":

@@ -388,6 +388,160 @@ async def test_bm25_search_clamps_invalid_limit():
     assert captured["params"]["k"] == 10
 
 
+# ─── Hybrid retrieval — Reciprocal Rank Fusion (#28) ─────────────────────
+
+
+def _row(memory_id: int, content: str = "stub", score: float = 0.0) -> dict:
+    """Minimal row fixture matching the search_recall / search_bm25 shape."""
+    return {
+        "id": memory_id,
+        "content": content,
+        "importance_score": 0.5,
+        "created_at": "2026-04-15T00:00:00",
+        "score": score,
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_fuses_overlapping_lists_by_rrf():
+    """Doc 4 ranks 1st in both lists; doc 7 ranks 2nd in both. With k=60
+    standard RRF gives doc 4 (1/61 + 1/61) and doc 7 (1/62 + 1/62), then
+    each unique doc contributes only its single 1/(k+rank) — the fused
+    order should be 4 > 7 > {3, 9} > {5, 11}."""
+    semantic = [_row(4), _row(7), _row(3), _row(5)]
+    bm25 = [_row(4), _row(7), _row(9), _row(11)]
+    mm = MemoryManager()
+    mm.search_recall = AsyncMock(return_value=semantic)
+    mm.search_bm25 = AsyncMock(return_value=bm25)
+    out = await mm.search_hybrid("matthew", limit=4)
+    assert [r["id"] for r in out[:2]] == [4, 7]
+    # k_rrf default is 60; doc 4 rank 1+1 → 2/61 ≈ 0.0328
+    assert out[0]["score"] == pytest.approx(2 / 61, rel=1e-6)
+    assert out[1]["score"] == pytest.approx(2 / 62, rel=1e-6)
+    # The remaining two slots are doc 3 (semantic-only rank 3) and doc 9
+    # (bm25-only rank 3) — both score 1/63. Order between them is stable
+    # by Python sort, but their scores are equal.
+    tail_ids = sorted(r["id"] for r in out[2:])
+    assert tail_ids == [3, 9]
+    assert out[2]["score"] == pytest.approx(1 / 63, rel=1e-6)
+    assert out[3]["score"] == pytest.approx(1 / 63, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_degrades_to_semantic_when_bm25_empty():
+    semantic = [_row(1), _row(2)]
+    mm = MemoryManager()
+    mm.search_recall = AsyncMock(return_value=semantic)
+    mm.search_bm25 = AsyncMock(return_value=[])
+    out = await mm.search_hybrid("x", limit=2)
+    assert [r["id"] for r in out] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_returns_empty_when_both_empty():
+    mm = MemoryManager()
+    mm.search_recall = AsyncMock(return_value=[])
+    mm.search_bm25 = AsyncMock(return_value=[])
+    assert await mm.search_hybrid("x") == []
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_swallows_exceptions_from_either_source():
+    """If one source raises, the fused result must still be the other —
+    matches the per-method `return []` contract."""
+    mm = MemoryManager()
+    mm.search_recall = AsyncMock(side_effect=RuntimeError("ollama down"))
+    mm.search_bm25 = AsyncMock(return_value=[_row(42)])
+    out = await mm.search_hybrid("q", limit=3)
+    assert [r["id"] for r in out] == [42]
+
+    mm.search_recall = AsyncMock(return_value=[_row(99)])
+    mm.search_bm25 = AsyncMock(side_effect=RuntimeError("postgres down"))
+    out = await mm.search_hybrid("q", limit=3)
+    assert [r["id"] for r in out] == [99]
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_overrides_per_source_score_with_rrf():
+    """The per-source `score` (cosine sim, ts_rank_cd) is meaningful for
+    its source but not directly comparable. After fusion the returned
+    `score` is the RRF score so callers can introspect fusion strength."""
+    semantic = [_row(1, score=0.95), _row(2, score=0.7)]
+    bm25 = [_row(1, score=12.0), _row(2, score=3.0)]
+    mm = MemoryManager()
+    mm.search_recall = AsyncMock(return_value=semantic)
+    mm.search_bm25 = AsyncMock(return_value=bm25)
+    out = await mm.search_hybrid("q", limit=2)
+    # doc 1 ranks 1st in both → RRF = 2/61
+    assert out[0]["id"] == 1
+    assert out[0]["score"] == pytest.approx(2 / 61, rel=1e-6)
+    # The original per-source scores must NOT survive.
+    assert out[0]["score"] != pytest.approx(0.95)
+    assert out[0]["score"] != pytest.approx(12.0)
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_overfetches_from_each_source():
+    """Each source must receive a request for `limit * _HYBRID_OVERFETCH`
+    so RRF has enough material — fetching only `limit` from each source
+    starves the union and biases toward whichever source ranks first."""
+    captured: dict = {"recall": None, "bm25": None}
+
+    async def fake_recall(query, limit, **kwargs):
+        captured["recall"] = limit
+        return []
+
+    async def fake_bm25(query, limit):
+        captured["bm25"] = limit
+        return []
+
+    mm = MemoryManager()
+    mm.search_recall = fake_recall
+    mm.search_bm25 = fake_bm25
+    await mm.search_hybrid("q", limit=5)
+    assert captured["recall"] == 5 * MemoryManager._HYBRID_OVERFETCH
+    assert captured["bm25"] == 5 * MemoryManager._HYBRID_OVERFETCH
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_clamps_invalid_k_rrf():
+    """A non-positive `k_rrf` would make the score formula go negative or
+    explode at `k_rrf == -rank`; clamp to the default rather than corrupt
+    the ranking."""
+    semantic = [_row(1), _row(2)]
+    bm25 = [_row(1), _row(3)]
+    mm = MemoryManager()
+    mm.search_recall = AsyncMock(return_value=semantic)
+    mm.search_bm25 = AsyncMock(return_value=bm25)
+    out = await mm.search_hybrid("q", limit=3, k_rrf=-7)
+    # With clamp → DEFAULT_RRF_K (60), doc 1 ranks first (2/61).
+    assert out[0]["id"] == 1
+    assert out[0]["score"] == pytest.approx(2 / 61, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_clamps_invalid_limit():
+    """Mirrors the bounds check on `search_recall` and `search_bm25` —
+    a non-positive limit cannot reach Postgres unconverted."""
+    captured: dict = {}
+
+    async def fake_recall(query, limit, **kwargs):
+        captured.setdefault("recall_limits", []).append(limit)
+        return []
+
+    async def fake_bm25(query, limit):
+        captured.setdefault("bm25_limits", []).append(limit)
+        return []
+
+    mm = MemoryManager()
+    mm.search_recall = fake_recall
+    mm.search_bm25 = fake_bm25
+    await mm.search_hybrid("q", limit=-3)
+    # default 10 → overfetch becomes 20 on each leg.
+    assert captured["recall_limits"] == [10 * MemoryManager._HYBRID_OVERFETCH]
+    assert captured["bm25_limits"] == [10 * MemoryManager._HYBRID_OVERFETCH]
+
+
 @pytest.mark.asyncio
 async def test_bm25_search_swallows_db_errors():
     """Tools must return [] on transient DB errors rather than raising —

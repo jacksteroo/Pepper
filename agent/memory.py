@@ -282,6 +282,92 @@ class MemoryManager:
             logger.error("bm25_search_failed", error=str(e))
             return []
 
+    # Epic 02 (#28) — Reciprocal Rank Fusion combiner.
+    # Standard RRF: `score(d) = Σ 1/(k + rank_i(d))` for k = 60. The constant
+    # k=60 is a conventional default from Cormack et al. 2009; it dampens
+    # the contribution of items deep in any single list. Both the formula
+    # and the constant are candidates for replacement once #45 (DSPy
+    # optimization) has trace volume to train a learned reranker against.
+    # Until then, RRF is parameter-free and works without tuning — exactly
+    # what we want before traces exist.
+    DEFAULT_RRF_K = 60
+    _HYBRID_OVERFETCH = 2  # fetch 2× limit from each source before fusion
+
+    async def search_hybrid(
+        self,
+        query: str,
+        limit: int = 10,
+        time_window_days: int | None = DEFAULT_RECALL_TAU_DAYS,
+        alpha: float = DEFAULT_RECALL_ALPHA,
+        k_rrf: int = DEFAULT_RRF_K,
+    ) -> list[dict]:
+        """Hybrid retrieval: BM25 (#27) + recency-adjusted semantic (#29)
+        fused by Reciprocal Rank Fusion.
+
+        Runs both retrievers concurrently — neither shares a connection,
+        so the dominant cost is whichever finishes last (typically the
+        embed call inside ``search_recall``). Items present in both lists
+        get additive RRF contributions and surface near the top.
+
+        Returns rows in the same shape as the source methods, with
+        ``score`` overwritten by the RRF score so callers (and the eval
+        runner in #30) can introspect fusion strength.
+
+        Forward-compat: ``k_rrf`` is exposed for the learned-reranker
+        follow-up tracked under #45 / Q2. Default RRF stays the policy
+        until that reranker measurably beats it on the eval set.
+        """
+        import asyncio  # local — keeps the module import cheap
+
+        if limit < 1:
+            logger.warning("search_hybrid_invalid_limit", limit=limit)
+            limit = 10
+        if k_rrf < 1:
+            # `1/(k_rrf + rank)` goes negative for k_rrf < 0 and explodes
+            # at k_rrf == -rank, so reject any non-positive value rather
+            # than silently producing nonsense rankings.
+            logger.warning("search_hybrid_invalid_k_rrf", k_rrf=k_rrf)
+            k_rrf = self.DEFAULT_RRF_K
+
+        overfetch = limit * self._HYBRID_OVERFETCH
+        semantic_task = self.search_recall(
+            query,
+            limit=overfetch,
+            time_window_days=time_window_days,
+            alpha=alpha,
+        )
+        bm25_task = self.search_bm25(query, limit=overfetch)
+        semantic, bm25 = await asyncio.gather(
+            semantic_task, bm25_task, return_exceptions=True
+        )
+
+        # Graceful degradation — if one source raises (transient DB error,
+        # Ollama timeout on the embed), fall back to whatever the other
+        # produced. Matches the `return []` posture the source methods
+        # already adopt internally, but defends against the gather case.
+        if isinstance(semantic, Exception):
+            logger.warning("search_hybrid_semantic_failed", error=str(semantic))
+            semantic = []
+        if isinstance(bm25, Exception):
+            logger.warning("search_hybrid_bm25_failed", error=str(bm25))
+            bm25 = []
+
+        rrf_scores: dict[int, float] = {}
+        rows_by_id: dict[int, dict] = {}
+        for ranked in (semantic, bm25):
+            for rank, row in enumerate(ranked, start=1):
+                rid = int(row["id"])
+                rrf_scores[rid] = rrf_scores.get(rid, 0.0) + 1.0 / (k_rrf + rank)
+                # First sighting wins for the row payload — the per-source
+                # `score` is overwritten below with the RRF score.
+                rows_by_id.setdefault(rid, row)
+
+        ordered_ids = sorted(rrf_scores, key=lambda rid: -rrf_scores[rid])[:limit]
+        return [
+            {**rows_by_id[rid], "score": rrf_scores[rid]}
+            for rid in ordered_ids
+        ]
+
     async def get_recent_recall(self, days: int = 30) -> list[MemoryEvent]:
         """Fetch recall events from the last N days."""
         if not self._db_factory:

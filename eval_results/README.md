@@ -24,16 +24,19 @@ $ cp agent/tests/retrieval_eval_set.example.jsonl \
      agent/tests/retrieval_eval_set.jsonl
 $ $EDITOR agent/tests/retrieval_eval_set.jsonl
 
-# Baseline run — must happen before any retrieval change in this epic.
+# Baseline — semantic-only path (#27/#28/#29 not yet engaged).
 $ .venv/bin/python scripts/run_retrieval_eval.py --mode baseline
 
-# After a sub-issue lands (re-run on each):
-$ .venv/bin/python scripts/run_retrieval_eval.py --mode after --tag bm25
-$ .venv/bin/python scripts/run_retrieval_eval.py --mode after --tag rrf
-$ .venv/bin/python scripts/run_retrieval_eval.py --mode after --tag recency
+# After each sub-issue lands, switch retriever-mode to measure deltas:
+$ .venv/bin/python scripts/run_retrieval_eval.py \
+    --mode after --tag bm25 --retriever-mode bm25
+$ .venv/bin/python scripts/run_retrieval_eval.py \
+    --mode after --tag recency --retriever-mode semantic
+$ .venv/bin/python scripts/run_retrieval_eval.py \
+    --mode after --tag rrf --retriever-mode hybrid
 
-# Final gate check (#30 part B will wire this into CI):
-$ .venv/bin/python scripts/run_retrieval_eval.py --mode gate
+# Final gate check — uses --retriever-mode hybrid against the locked baseline.
+$ .venv/bin/python scripts/run_retrieval_eval.py --mode gate --retriever-mode hybrid
 ```
 
 ## Privacy
