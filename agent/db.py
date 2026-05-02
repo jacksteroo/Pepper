@@ -51,6 +51,11 @@ async def init_db(config=None) -> None:
         # 1. Enable pgvector extension
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
+        # 1a. Ensure the traces SQLAlchemy model is imported before
+        # `Base.metadata.create_all` runs — the model registers itself
+        # with `Base.metadata` only at import time.
+        import agent.traces.models  # noqa: F401  (side-effect import)
+
         # 2. Create all tables defined via Base
         await conn.run_sync(Base.metadata.create_all)
 
@@ -151,6 +156,13 @@ async def init_db(config=None) -> None:
                 "WHERE archived_at IS NULL"
             )
         )
+
+        # Epic 01 (#20) — traces table: specialised indexes, role
+        # creation, and per-column UPDATE grants live in their own
+        # module to keep `init_db` readable.
+        from agent.traces.migration import apply_traces_migration
+
+        await apply_traces_migration(conn)
 
 
 def get_engine():

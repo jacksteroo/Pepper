@@ -68,7 +68,7 @@ The Python `Trace` dataclass (`agent/traces/schema.py`) is `frozen=True` so an i
 Three roles divide trace-table privilege:
 
 - **`pepper_traces_writer`** (used by `agent/core.py`, `agent/scheduler.py`, and the four agent processes) — `INSERT` only. No `UPDATE`, no `DELETE`.
-- **`pepper_traces_compactor`** (used by the embedding worker and the nightly compression job) — `SELECT` plus `UPDATE` on `(embedding, embedding_model_version, tier)`. No `DELETE`. No `UPDATE` on any other column.
+- **`pepper_traces_compactor`** (used by the embedding worker, the nightly compression job, and the reaction-capture path) — `SELECT` plus `UPDATE` on `(embedding, embedding_model_version, tier, user_reaction)`. No `DELETE`. No `UPDATE` on any other column. The four columns map 1:1 to the carve-outs enumerated in §Mutability above.
 - **`pepper_traces_reader`** (used by E4 reflector, E5 optimizer, and the `/traces` HTTP route #24) — `SELECT` only.
 
 The compactor role is the only path by which the carve-out columns may change. Postgres permits per-column `GRANT UPDATE (col1, col2, col3) ON traces`; #20 uses that. Without a per-column `UPDATE` grant the compactor would have full-row update rights, defeating the invariant at the database layer.
