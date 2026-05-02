@@ -8,7 +8,12 @@ import structlog
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
+from typing import TYPE_CHECKING
+
 from agent import chat_turn_logger, success_signal
+
+if TYPE_CHECKING:
+    from agent.traces import TriggerSource as _TriggerSourceHint
 from agent.config import Settings
 from agent.llm import ModelClient
 from agent.life_context import build_system_prompt, get_life_context_sections, get_owner_name, update_life_context
@@ -2051,13 +2056,32 @@ class PepperCore:
         heavy: bool | None = None,
         channel: str = "",
         isolated: bool = False,
+        trigger_source: "_TriggerSourceHint | None" = None,
+        scheduler_job_name: str | None = None,
     ) -> str:
         """Public chat entry point.
 
         Wraps :meth:`_chat_impl` with the per-turn JSONL logger feeding the
         semantic-router migration (Phase 0 Task 2). The logger is best-effort
         and never alters the response.
+
+        Epic 01 (#22): also emits a row to the `traces` table via
+        `agent.traces.emitter.emit_trace`. Trace persistence is fail-soft —
+        an error in the emitter never propagates to the caller.
+
+        `trigger_source` defaults to `USER`; #23 wiring passes `SCHEDULER`.
+        `scheduler_job_name` is required when `trigger_source = SCHEDULER`.
         """
+        # Local imports keep `agent.traces` decoupled from `agent.core`'s
+        # module-level dependency graph and avoid a circular import.
+        from agent.traces import (
+            Trace,  # noqa: F401  (used in type-hint string above)
+        )
+        from agent.traces import TriggerSource as _TriggerSource
+
+        if trigger_source is None:
+            trigger_source = _TriggerSource.USER
+
         chat_turn_logger.start_turn()
         wall_started_at = time.perf_counter()
         response_text = ""
@@ -2123,6 +2147,82 @@ class PepperCore:
             except RuntimeError:
                 # No running event loop (synchronous test contexts) — skip.
                 pass
+
+            # Epic 01 (#22): emit a `traces` row alongside routing_events.
+            # Reads model + tool_calls from the chat_turn_logger snapshot
+            # we already captured. assembled_context stays as a stub
+            # until #33 (E3) plumbs richer provenance through the chat
+            # path. Persistence is fail-soft inside `emit_trace`.
+            try:
+                from agent.traces import (
+                    Archetype as _Archetype,
+                )
+                from agent.traces import DataSensitivity as _DS
+                from agent.traces.emitter import (
+                    TraceBuilder,
+                    emit_trace,
+                )
+
+                tb = TraceBuilder.start(
+                    input=user_message,
+                    trigger_source=trigger_source,
+                    archetype=_Archetype.ORCHESTRATOR,
+                    scheduler_job_name=scheduler_job_name,
+                    data_sensitivity=_DS.LOCAL_ONLY,
+                )
+                # Pull what the existing per-turn logger already captured.
+                model_name = (trace_snapshot or {}).get("model") or ""
+                tb.set_model(model_name)
+                for call in (trace_snapshot or {}).get("tool_calls") or []:
+                    name = call.get("name") if isinstance(call, dict) else None
+                    if not name:
+                        continue
+                    tb.add_tool_call(
+                        name=name,
+                        args=call.get("arguments") if isinstance(call, dict) else None,
+                        result_summary="",
+                    )
+                trace = tb.finish(
+                    output=response_text,
+                    latency_ms=latency_ms,
+                )
+
+                from agent import db as _db_mod
+
+                if _db_mod._session_factory is None:
+                    # DB not initialised yet — happens in a few test
+                    # contexts that exercise chat() without init_db.
+                    # Skip emission rather than fail the turn.
+                    raise RuntimeError("DB not initialised; skipping trace emission")
+                _trace_session_factory = _db_mod._session_factory
+
+                # Embedding worker uses the router-side qwen3 model so we
+                # match the schema's vector(1024) and ADR-0005's choice.
+                async def _embed(t: str) -> list[float]:
+                    return await self.llm.embed_router(t)
+
+                trace_task = asyncio.create_task(
+                    emit_trace(
+                        trace,
+                        session_factory=_trace_session_factory,
+                        embed_fn=_embed,
+                        embed_model_version="qwen3-embedding:0.6b",
+                    ),
+                )
+                self._background_tasks.add(trace_task)
+                trace_task.add_done_callback(self._background_tasks.discard)
+            except Exception as exc:
+                # Defence in depth — emit_trace already swallows. Log and
+                # carry on so a programming error in the wiring above
+                # (e.g. import failure on partial install) cannot break
+                # the user's turn.
+                from agent.traces.emitter import _safe_error_message
+
+                logger.warning(
+                    "trace_emit_wiring_failed",
+                    error_type=type(exc).__name__,
+                    error=_safe_error_message(exc),
+                )
 
     async def _chat_impl(
         self,
