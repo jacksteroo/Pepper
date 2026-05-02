@@ -43,5 +43,6 @@ ADRs do not get deleted. Their numbers do not get reused.
 - [0002-fifth-anchoring-principle-compounding-capability.md](0002-fifth-anchoring-principle-compounding-capability.md) — add fifth anchoring principle (compounding capability)
 - [0003-layer-2-is-the-active-surface.md](0003-layer-2-is-the-active-surface.md) — Layer 2 (Intelligence) is the active surface
 - [0004-introduce-agents-directory.md](0004-introduce-agents-directory.md) — introduce `agents/` directory parallel to `subsystems/`
+- [0005-trace-schema.md](0005-trace-schema.md) — canonical `Trace` record (Epic 01)
 
-The four foundational ADRs above are tracked in [Epic 00: Foundations & ADRs](https://github.com/jacksteroo/Pepper/issues/9).
+The four foundational ADRs above (0001–0004) are tracked in [Epic 00: Foundations & ADRs](https://github.com/jacksteroo/Pepper/issues/9). ADR-0005 is the first decision record produced under [Epic 01: Trace Substrate](https://github.com/jacksteroo/Pepper/issues/17).
