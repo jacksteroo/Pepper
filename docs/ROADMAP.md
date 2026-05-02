@@ -7,6 +7,7 @@ The current sequencing of this roadmap is set by ratified ADRs. When the sequenc
 - [ADR-0001](adr/0001-resequence-around-oj-calibration.md) — pause original Phases 4–6 (Knowledge / Health / Finance); sequence as substrate → inner life → subsystem expansion.
 - [ADR-0002](adr/0002-fifth-anchoring-principle-compounding-capability.md) — fifth anchoring principle: the system improves itself in response to its own behaviour, within human-reviewable bounds.
 - [ADR-0003](adr/0003-layer-2-is-the-active-surface.md) — Layer 2 (Intelligence + agent runtime) is the active surface for the next two sprints; Layer 1 is in maintenance.
+- [ADR-0004](adr/0004-introduce-agents-directory.md) — `agents/` directory parallel to `subsystems/`, with the same isolation rule, as the structural home for cognitive functions (reflector, monitor, researcher) the substrate phase will introduce.
 
 See [docs/adr/](adr/) for the full list.
 
