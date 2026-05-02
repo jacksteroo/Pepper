@@ -6,6 +6,8 @@ Pepper is a layered system. The orchestrator agent sits at the center with full 
 
 Nothing is monolithic. Every layer is independently replaceable.
 
+> Architectural decisions that shape this system are recorded in [`adr/`](adr/). When a section here cites an ADR, that ADR is the binding source for the decision — this document is the descriptive surface. `docs/GUARDRAILS.md` still takes precedence over any ADR.
+
 ---
 
 ## Layer Model

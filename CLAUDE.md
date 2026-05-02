@@ -31,6 +31,7 @@ maintenance/    # Self-upgrade and health check agents
 ## Key References
 
 - **Guardrails**: [docs/GUARDRAILS.md](docs/GUARDRAILS.md) — **READ THIS FIRST** — development guardrails based on OpenAI's harness engineering
+- **Architectural decisions**: [docs/adr/](docs/adr/) — canonical home for architectural decision records (ADRs). Any decision that survives a Notion thread becomes an ADR before the implementation PR opens.
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)
 - Life Context: [docs/LIFE_CONTEXT.md](docs/LIFE_CONTEXT.md) — this is Pepper's ground truth about its owner

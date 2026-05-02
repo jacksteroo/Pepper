@@ -16,7 +16,8 @@ Pepper must operate under similar principles: **the harness makes the agent reli
 
 **Rule**: Anything the agent can't access in-context doesn't exist.
 
-- All architectural decisions live in `docs/`
+- All architectural decisions live in [`adr/`](adr/) as ADRs. Descriptive docs (architecture, roadmap, principles) live elsewhere in `docs/`; ADRs are the normative source for the decision they record. **This file (GUARDRAILS.md) overrides any ADR if they conflict** — see "ADR precedence" below.
+- **Any decision that survives a Notion thread becomes an ADR before the implementation PR opens.** If the discussion converged, the rationale exists somewhere — capture it in an ADR or it will rot.
 - All configuration schemas live in code or example files (`.env.example`, `config/`)
 - All personal data mappings live in gitignored config files (`config/local/accounts.json`)
 - Knowledge in Google Docs, Slack threads, or people's heads is invisible to the agent
@@ -27,8 +28,11 @@ Pepper must operate under similar principles: **the harness makes the agent reli
 - Life context in `docs/LIFE_CONTEXT.md` (version controlled)
 - Roadmap in `docs/ROADMAP.md` (version controlled)
 - Architecture in `docs/ARCHITECTURE.md` (version controlled)
+- Architectural decisions in [`docs/adr/`](adr/) (version controlled)
 - Development instructions in `CLAUDE.md` (version controlled)
 - Personal config in `config/local/accounts.json` (gitignored, template in repo)
+
+**ADR precedence.** ADRs are normative for the architectural decisions they record, but they sit below this file in the precedence stack. If an ADR — proposed, accepted, or otherwise — conflicts with a guardrail in `GUARDRAILS.md` (Privacy-First, Subsystem Boundaries, Permission Boundaries, etc.), the guardrail wins and the ADR cannot be merged in that form. Reviewers should reject any ADR that weakens a guardrail without a corresponding update to this file landed first.
 
 ### 2. Privacy-First Architecture (Non-Negotiable)
 
