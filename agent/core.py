@@ -15,6 +15,7 @@ from agent import chat_turn_logger, success_signal
 if TYPE_CHECKING:
     from agent.traces import TriggerSource as _TriggerSourceHint
 from agent.config import Settings
+from agent.context import ContextAssembler, Turn as _AssemblerTurn, render_grounding_rules
 from agent.llm import ModelClient
 from agent.life_context import build_system_prompt, get_life_context_sections, get_owner_name, update_life_context
 from agent.tool_router import ToolRouter
@@ -30,7 +31,7 @@ from agent.models import Conversation, RoutingEvent
 from agent.briefs import CommitmentExtractor
 from agent.context_compressor import ContextCompressor
 from agent.error_classifier import ClassifiedLLMError, ErrorCategory
-from agent.skills import load_all_skills, build_index
+from agent.skills import load_all_skills
 from agent.skill_reviewer import SkillReviewer
 from agent.skill_tools import SKILL_TOOLS, execute_skill_tool
 from agent.web_search import brave_search, brave_image_search
@@ -363,7 +364,10 @@ class PepperCore:
         )
         self.tool_router = ToolRouter()
         self._mcp_client = MCPClient(config_path=mcp_config_path)
-        self._system_prompt: str = ""
+        # Backed by a private attribute; the property below mirrors writes
+        # into the assembler's life-context cache so unit tests that set
+        # ``pepper._system_prompt = "..."`` stay in sync after #32.
+        self.__system_prompt: str = ""
         self._initialized = False
         self.commitment_extractor = CommitmentExtractor(llm_client=self.llm)
         self._compressor = ContextCompressor(
@@ -396,6 +400,20 @@ class PepperCore:
         self._router = QueryRouter()
         self._capability_registry = CapabilityRegistry()
 
+        # Issue #32: context-assembly module. Composes per-turn system
+        # prompt + history from named selectors. Pure refactor — same
+        # rendered output as the inline construction code that lived here
+        # previously. The skills_provider closure lets reload_skills()
+        # swap _skills without invalidating the assembler.
+        self.assembler = ContextAssembler(
+            life_context_path=self.config.LIFE_CONTEXT_PATH,
+            config=self.config,
+            capability_registry=self._capability_registry,
+            memory_manager=self.memory,
+            skills_provider=lambda: self._skills,
+            timezone=self.config.TIMEZONE,
+        )
+
         # Phase 2 shadow mode: SemanticRouter runs in parallel with the
         # regex router on every turn (read-only, off the critical path)
         # and its top decision is persisted to
@@ -427,6 +445,28 @@ class PepperCore:
                 name, args, session_id="pending_actions", skip_mcp_write_gate=True
             )
         )
+
+    @property
+    def _system_prompt(self) -> str:
+        """The cached system prompt for the current owner.
+
+        Kept for backwards-compat: unit tests and Telegram diagnostics read
+        this directly. Writes are mirrored into the context assembler so the
+        rendered prompt stays consistent with whatever is set here. See
+        issue #32 for the refactor that introduced the assembler.
+        """
+        return self.__system_prompt
+
+    @_system_prompt.setter
+    def _system_prompt(self, value: str) -> None:
+        self.__system_prompt = value or ""
+        # Mirror into the assembler's cache so the next assemble() picks up
+        # the exact same string. ``assembler`` may be unset during the very
+        # early init (the property is touched before ``self.assembler`` is
+        # constructed); guard against that.
+        asm = getattr(self, "assembler", None)
+        if asm is not None:
+            asm.life_context_selector.prime(self.__system_prompt)
 
     def _load_skills(self):
         if self._skills_dir_override is not None:
@@ -1927,9 +1967,15 @@ class PepperCore:
         except Exception as e:
             logger.warning("capability_registry_init_failed", error=str(e))
 
+        # Issue #32: the assembler caches the rendered system prompt
+        # internally; we still keep ``self._system_prompt`` populated for
+        # backward-compatible introspection (some tests/Telegram diagnostics
+        # read it directly). The two values stay in lockstep — both are
+        # produced by ``build_system_prompt`` against the same inputs.
         self._system_prompt = build_system_prompt(
             self.config.LIFE_CONTEXT_PATH, self.config, self._capability_registry
         )
+        self.assembler.refresh_life_context()
 
         # Phase 5: initialize MCP client and wire it into the tool router
         try:
@@ -2974,28 +3020,60 @@ class PepperCore:
             model=model,
         )
 
-        # Build system prompt, optionally augmented with recalled context
-        tz = ZoneInfo(self.config.TIMEZONE)
-        now_local = datetime.now(tz)
-        system = f"[Current time: {now_local.strftime('%A, %B %-d, %Y at %-I:%M %p')} {now_local.tzname()} ({self.config.TIMEZONE})]\n\n" + self._system_prompt
-        if channel:
-            system = f"[Interface: You are responding via {channel}.]\n\n" + system
-        if memory_context:
-            system += f"\n\n{memory_context}"
-        if web_context:
-            system += f"\n\n{web_context}"
-        if routing_context:
-            system += f"\n\n{routing_context}"
-        if calendar_context:
-            system += f"\n\n{calendar_context}"
-        if email_context:
-            system += f"\n\n{email_context}"
-        if imessage_context:
-            system += f"\n\n{imessage_context}"
-        if whatsapp_context:
-            system += f"\n\n{whatsapp_context}"
-        if slack_context:
-            system += f"\n\n{slack_context}"
+        # Issue #32: per-turn prompt construction lives in
+        # ``agent.context.ContextAssembler``. Selectors fetched here include
+        # life_context, capability_block, retrieved_memory, last_n_turns,
+        # and skill_match (per the issue brief). Proactive contexts
+        # (web/calendar/email/etc.) and the heavy GROUNDING RULES block are
+        # passed through the Turn so byte-identical output is preserved.
+        if heavy:
+            owner_name = get_owner_name(self.config.LIFE_CONTEXT_PATH, self.config)
+            owner_first = owner_name.split()[0]
+            grounding_rules_suffix = render_grounding_rules(owner_name, owner_first)
+        else:
+            grounding_rules_suffix = ""
+
+        # Phase 4.2 / Issue #32: skills index toggle. The model picks up
+        # skill bodies on demand via skill_view (see docs/SKILLS.md for the
+        # lazy-load model). Skipped on ANSWER_FROM_CONTEXT turns since the
+        # tool list is stripped to recall-only, making the index entries
+        # (which point to skill_view) misleading.
+        _include_skills_index = (
+            routing.action_mode != ActionMode.ANSWER_FROM_CONTEXT or is_live_data_query
+        )
+
+        # ANSWER_FROM_CONTEXT queries (life-context status checks) don't
+        # need long conversation history — the life context in the system
+        # prompt is the source. A shorter window prevents stale data from
+        # prior turns from overriding it.
+        _history_limit = 6 if routing.action_mode == ActionMode.ANSWER_FROM_CONTEXT else 20
+
+        _assembled = self.assembler.assemble(
+            _AssemblerTurn(
+                user_message=user_message,
+                channel=channel,
+                isolated=isolated,
+                history_limit=_history_limit,
+                memory_context=memory_context,
+                web_context=web_context,
+                routing_context=routing_context,
+                calendar_context=calendar_context,
+                email_context=email_context,
+                imessage_context=imessage_context,
+                whatsapp_context=whatsapp_context,
+                slack_context=slack_context,
+                include_skills_index=_include_skills_index,
+                extra_system_suffix=grounding_rules_suffix,
+            )
+        )
+        # Persist the assembler's per-selector provenance to the active
+        # chat-turn trace so the trace builder in ``chat()`` can pick it up
+        # alongside routing/LLM data. Issue #33 (E3) will read this back to
+        # attach assembled-context provenance to the ``traces`` row — keeping
+        # _chat_impl's return signature unchanged.
+        chat_turn_logger.record_assembled_context(_assembled.provenance)
+        system = _assembled.render_prompt()
+        history = list(_assembled.history)
 
         chat_logger.info(
             "context_injected_into_prompt",
@@ -3014,152 +3092,8 @@ class PepperCore:
         )
 
         if heavy:
-            # Anti-hallucination guardrail. Small local models love to emit
-            # template placeholders like [Commitment XYZ] / [Name] / [Date]
-            # when a question matches a familiar shape. Forbid that
-            # explicitly and force grounding on the injected context.
-            owner_name = get_owner_name(self.config.LIFE_CONTEXT_PATH, self.config)
-            owner_first = owner_name.split()[0]
-            system += (
-                "\n\n[GROUNDING RULES — read before answering]\n"
-                f"0. The human user is {owner_name}. "
-                "You are Pepper. If asked who the user is, answer with the human's identity, not your own.\n"
-                f"1. The sections above (calendar, email, messages, memory, "
-                f"web) contain REAL data fetched live for this turn. For inbox, "
-                f"schedule, and message queries: use ONLY that fetched data. "
-                f"For status/logistics questions about open loops, trips, or "
-                f"pending confirmations: answer from the life context already in "
-                f"your system prompt — do NOT say you lack information.\n"
-                "1a. CRITICAL — when calendar data is present above: you MUST "
-                "report what is in it for schedule/calendar questions. NEVER say "
-                "'I don't track that information', 'I don't have access', or 'I "
-                "don't track your family's schedule' when calendar data has been "
-                "fetched — doing so is a hard error. If you see calendar events, "
-                "report them. If the fetched calendar has no relevant events for "
-                "the question (e.g. no kids' specific events), say exactly that: "
-                "'I don't see any kids' specific events on your calendar this "
-                "weekend — your calendar shows [X]' rather than claiming you "
-                "lack access or don't track schedules.\n"
-                "1b. CRITICAL — when 'Web search results' appear in the sections "
-                "above, the system has ALREADY fetched live web data for this "
-                "turn via Pepper's search_web tool (Brave Search). It is a HARD "
-                "ERROR to claim you are offline, lack internet access, are "
-                "experiencing a network issue, or cannot reach the web. The "
-                "results are right there — synthesize a direct answer from the "
-                "titles and descriptions, then cite the URLs verbatim. If the "
-                "fetched results don't actually answer the question, say "
-                "'The web results I pulled don't directly answer that — here's "
-                "what they cover: [brief summary]' and list the URLs. Never "
-                "apologise for being unable to access the internet.\n"
-                "2. NEVER emit placeholder template text like "
-                "'[Commitment XYZ]', '[Name]', '[Date]', '[Project ABC]', "
-                "or any bracketed stand-in. If you don't have a specific "
-                "real item to name, say so plainly: 'I don't see anything "
-                "specific in your <calendar/inbox/...> matching that.'\n"
-                "3. If a section above is empty or missing, do NOT invent "
-                "events, emails, or commitments. Say what's missing.\n"
-                "4. Quote real entity names (real people, real meeting "
-                "titles, real subject lines) directly from the data above. "
-                "If you can't, that's a signal you don't have the answer.\n"
-                "5. If asked whether you have access to WhatsApp, iMessage, email, "
-                "or any other data source, call the relevant tool first. NEVER "
-                "claim you can or cannot see messages without tool evidence. "
-                "If the tool returns an error, report the error verbatim.\n"
-                "6. If the user names a specific source like WhatsApp, answer "
-                "from that source only unless they explicitly ask to combine "
-                "multiple sources.\n"
-                f"7. Be concise and direct. {owner_first} prefers short answers.\n"
-                "8. ONLY address the CURRENT user message — the last message in the "
-                "conversation. Prior turns are history for context only. Do NOT "
-                "re-answer, continue, or follow up on topics from earlier turns "
-                "unless the current message explicitly asks you to.\n"
-                "9. For questions about what's still pending, what needs to be "
-                "confirmed, what's left to do, or the status of a specific trip, "
-                "event, or logistics item (e.g. 'What's left to confirm for "
-                "Orlando?', 'What still needs booking for Boston?'): answer "
-                "DIRECTLY from all life context sections injected in this prompt — "
-                "especially 'Kids — Activities and What Needs Attention', "
-                "'Open Loops Taking Up Mental Space', and 'Active Challenges'. "
-                "Trip logistics (flights, lodging, transport) appear in the Activities "
-                "section — for EACH logistics component, check whether the life context "
-                "EXPLICITLY states it is confirmed, booked, or sorted. Only say a "
-                "component is confirmed if the life context uses those exact words for "
-                "it. If the life context mentions a component (e.g. a flight date, a "
-                "meeting point, accommodation) WITHOUT explicitly saying 'confirmed', "
-                "'booked', or 'sorted' for that item, list it as 'not yet confirmed — "
-                "open item'. Do NOT call get_upcoming_events, "
-                "get_calendar_events_range, get_driving_time, or any other tool "
-                "for these questions — the answer is in your life context. "
-                "IMPORTANT SCOPING RULE: When the question names a specific trip, "
-                "event, or named program (e.g. 'Orlando', 'Boston', 'volleyball', "
-                "'Harvard program', 'Harvard pre-college'), ONLY surface items "
-                "directly related to that specific trip or program. Do NOT pull in "
-                "open loops or notes about unrelated programs or events that happen "
-                "to appear near the relevant item in the life context. If a named "
-                "program (e.g. 'Matthew's Harvard program') is confirmed in the life "
-                "context, state that confirmation first, then list only specific "
-                "pending logistics for that program — do NOT surface the general "
-                "'confirm application status' note for other programs as if it "
-                "applies to the named confirmed program.\n"
-                "10. Items listed in 'Open Loops Taking Up Mental Space' or "
-                "'Active Challenges' are explicitly NOT resolved. If asked "
-                "'is X sorted/done/confirmed?' and X appears as an open loop, "
-                "the answer is NO — still outstanding. NEVER describe an open "
-                "loop item as completed, done, or set up. Report it as still "
-                "pending and state what action is needed.\n"
-                "11. For questions about summer programs, pre-college programs, "
-                "program deadlines, or application statuses: FIRST surface any "
-                "programs explicitly named and confirmed in the life context — "
-                "state the program name, who it is for, and the start date "
-                "(e.g. 'Matthew is confirmed for the Harvard pre-college Quantum "
-                "Computing program, starting June 22'). A confirmed program's "
-                "START DATE is the most important upcoming item — treat it as the "
-                "primary answer to any 'what deadlines / what's coming up' question "
-                "in this category. THEN, for any remaining programs mentioned only "
-                "by category without specific names, state exactly what the life "
-                "context says and add 'Other specific program names and application "
-                "statuses aren't in your life context — check your notes or email.' "
-                "Do not invent names or statuses.\n"
-                "12. NEVER soften explicitly confirmed facts. When the life context uses "
-                "the words 'confirmed', 'booked', or 'sorted', reflect that exact level "
-                "of certainty in your answer. Do NOT downgrade to 'seems to be', "
-                "'appears to be', 'should be set up', 'might be', or any other hedged "
-                "form. If the life context says 'flights confirmed', say 'flights are "
-                "confirmed' — not 'flights seem to be set up'. Preserve the original "
-                "certainty level exactly.\n"
-                f"13. NEVER refer to the owner by name ({owner_first} or {owner_name}) "
-                "in your response. Always use 'you', 'your', or 'yourself'. "
-                f"Writing '{owner_first}' in a response is always wrong — replace it "
-                "with the appropriate second-person pronoun. "
-                "If a specific status (lodging, flights, transport) is NOT mentioned "
-                "in the life context, state it plainly as 'not yet confirmed — open item' "
-                "rather than suggesting the owner ask or follow up with anyone.\n"
-                "14. For questions about Susan's career or career transition: report "
-                "confirmed facts only — her confirmed start date, company, and any "
-                "life-context-stated household implications. Do NOT invent household "
-                "task redistribution advice (cooking, cleaning, driving kids, shared "
-                "schedule discussions) unless explicitly grounded in the life context. "
-                "Do NOT give generic relationship encouragement or motivational support "
-                "sentences. Stick to what is known and actionable."
-            )
             await _progress("Synthesizing response...")
 
-        # Phase 4.2: inject the skills index. The model picks up bodies on demand
-        # via skill_view; see docs/SKILLS.md for the lazy-load model. Skipped on
-        # ANSWER_FROM_CONTEXT turns since the tool list is stripped to recall-only,
-        # making the index entries (which point to skill_view) misleading.
-        if routing.action_mode != ActionMode.ANSWER_FROM_CONTEXT or is_live_data_query:
-            skills_index = build_index(self._skills)
-            if skills_index:
-                system = system + "\n\n" + skills_index
-
-        # Working memory already includes the user message we just added.
-        # Isolated calls have no shared history — use an empty list.
-        # ANSWER_FROM_CONTEXT queries (life-context status checks) don't need long
-        # conversation history — the life context in the system prompt is the source.
-        # A shorter window prevents stale data from prior turns from overriding it.
-        _history_limit = 6 if routing.action_mode == ActionMode.ANSWER_FROM_CONTEXT else 20
-        history = [] if isolated else self.memory.get_working_memory(limit=_history_limit)
         messages = [{"role": "system", "content": system}] + history
         chat_logger.info(
             "llm_messages_prepared",
@@ -4721,6 +4655,9 @@ class PepperCore:
                 self._system_prompt = build_system_prompt(
                     self.config.LIFE_CONTEXT_PATH, self.config, self._capability_registry
                 )
+                # Issue #32: keep assembler cache in sync with the freshly
+                # rebuilt prompt so subsequent turns see the new context.
+                self.assembler.refresh_life_context()
                 result = {"ok": True, "message": f"Updated section: {args['section']}"}
 
             elif name == "get_driving_time":

@@ -47,7 +47,12 @@ def start_turn() -> dict[str, Any]:
     Returns the trace dict so the caller can hold a reference even if the
     ContextVar is later reset by a nested task.
     """
-    trace: dict[str, Any] = {"model": None, "tool_calls": [], "routing": None}
+    trace: dict[str, Any] = {
+        "model": None,
+        "tool_calls": [],
+        "routing": None,
+        "assembled_context": None,
+    }
     _CURRENT_TRACE.set(trace)
     return trace
 
@@ -75,6 +80,27 @@ def record_routing(
         "sources": list(sources) if sources else None,
         "confidence": confidence,
     }
+
+
+def record_assembled_context(provenance: dict[str, Any] | None) -> None:
+    """Stamp the active turn's trace with the assembler's provenance map.
+
+    Called from ``PepperCore._chat_impl`` right after
+    ``ContextAssembler.assemble`` returns. The provenance dict (one entry per
+    selector) is opaque here — we just attach it to the trace ContextVar so
+    the trace builder in ``PepperCore.chat`` can pick it up alongside the
+    routing + LLM data it already reads. Issue #33 (E3) will read this off
+    the trace snapshot to attach assembled-context provenance to the
+    persisted ``traces`` row.
+
+    No-op when no turn is in flight.
+    """
+    if provenance is None:
+        return
+    trace = _CURRENT_TRACE.get()
+    if trace is None:
+        return
+    trace["assembled_context"] = provenance
 
 
 def record_llm(model: str | None, tool_calls: list[dict] | None) -> None:
