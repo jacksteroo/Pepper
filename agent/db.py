@@ -175,6 +175,18 @@ def get_engine():
     return _engine
 
 
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Return the initialised async session factory.
+
+    Use this from scripts that need to construct a `MemoryManager` (or any
+    other component that takes a `db_session_factory`) after `init_db()`
+    has run. Raises RuntimeError if init_db() has not been called yet.
+    """
+    if _session_factory is None:
+        raise RuntimeError("Database not initialised — call init_db() first")
+    return _session_factory
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Async generator providing a DB session — use as a FastAPI dependency."""
     if _session_factory is None:

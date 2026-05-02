@@ -1,0 +1,15 @@
+# agent/tests/retrieval_eval_set.example.jsonl — committed template for the
+# real eval set described in issue #30. Copy to retrieval_eval_set.jsonl
+# (gitignored) and replace these synthetic examples with ≥30 queries against
+# your actual memory IDs. The five categories below must all be represented.
+#
+# Schema (one JSON object per non-blank, non-# line):
+#   query        — natural-language query string
+#   expected_ids — list of memory_event ids you expect to surface in top-K
+#   category     — one of: factual, person, temporal, open_loop, hybrid
+#   notes        — optional free-text rationale (kept local; never logged)
+{"query": "what embedding model does the router use", "expected_ids": [1], "category": "factual", "notes": "exact factual lookup"}
+{"query": "what's been going on with Matthew lately", "expected_ids": [4, 5], "category": "person", "notes": "person-context with recency tilt"}
+{"query": "recent updates from the team", "expected_ids": [7, 8], "category": "temporal", "notes": "default τ=30d should fire"}
+{"query": "what am I behind on", "expected_ids": [9, 10], "category": "open_loop", "notes": "open commitments"}
+{"query": "the doc about routing from april", "expected_ids": [11, 12], "category": "hybrid", "notes": "distinctive keyword + topical match"}

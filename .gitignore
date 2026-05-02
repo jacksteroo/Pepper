@@ -37,3 +37,11 @@ backups/router/phase_*_pre_cutover_*/
 backups/router/*.csv
 backups/router/*.jsonl
 backups/router/*.sql
+
+# Epic 02 (#30) — real retrieval eval set is RAW_PERSONAL (queries against
+# the user's actual memory). The committed `.example.jsonl` is the template;
+# the populated `retrieval_eval_set.jsonl` stays local.
+agent/tests/retrieval_eval_set.jsonl
+# Local-only baseline JSON; aggregate markdown reports may be committed
+# (they don't contain queries).
+eval_results/baseline.json
