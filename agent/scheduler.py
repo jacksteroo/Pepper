@@ -167,7 +167,11 @@ class PepperScheduler:
         # Query recall memory for commitment entries and filter out resolved ones.
         # If memory is unavailable (no DB/embeddings), fall through and notify anyway
         # rather than silently drop a potential reminder.
-        raw = await self.pepper.memory.search_recall("COMMITMENT", limit=20)
+        # Open commitments span all time; #29's default 30-day recency
+        # tilt would bury old-but-still-open promises. Disable it here.
+        raw = await self.pepper.memory.search_recall(
+            "COMMITMENT", limit=20, time_window_days=None
+        )
         cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
         open_items = []
         for item in raw:

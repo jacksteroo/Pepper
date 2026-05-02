@@ -71,15 +71,24 @@ async def _build_memory_retriever():
     """
     from agent.config import settings  # noqa: WPS433
     from agent.db import get_session_factory, init_db
-    from agent.llm import LLMClient
+    from agent.llm import ModelClient
     from agent.memory import MemoryManager
 
     await init_db(settings)
-    llm = LLMClient(settings)
+    llm = ModelClient(settings)
     mm = MemoryManager(llm_client=llm, db_session_factory=get_session_factory())
 
+    # Use the eval entry's `time_window_days` override if present, otherwise
+    # let MemoryManager.search_recall apply its default τ=30 (post-#29).
+    # Sentinel "use entry default" is `_NO_OVERRIDE` because `None` is a
+    # valid value (means "disable recency entirely" — the "ever" override).
+    _NO_OVERRIDE = object()
+
     async def retrieve(eval_query, k: int) -> list[int]:
-        results = await mm.search_recall(eval_query.query, limit=k)
+        kwargs: dict = {"limit": k}
+        if eval_query.time_window_days is not None:
+            kwargs["time_window_days"] = eval_query.time_window_days
+        results = await mm.search_recall(eval_query.query, **kwargs)
         return [int(r["id"]) for r in results]
 
     return retrieve

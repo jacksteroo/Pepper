@@ -6,7 +6,7 @@ import structlog
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Optional
-from sqlalchemy import select, delete, and_, text
+from sqlalchemy import select, delete, and_, text, func, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 from pgvector.sqlalchemy import Vector
 from agent.models import MemoryEvent, AuditLog
@@ -70,14 +70,53 @@ class MemoryManager:
         except Exception as e:
             logger.error("memory_save_failed", error=str(e))
 
-    async def search_recall(self, query: str, limit: int = 10) -> list[dict]:
-        """Semantic search over recall memory using pgvector cosine similarity."""
+    # Epic 02 (#29) — recency-adjusted semantic search over recall memory.
+    # Combined score: `final = α · sim + (1 − α) · exp(−Δt / τ)`, where
+    # `sim = 1 − cosine_distance` is the semantic similarity in [0, 1] and
+    # `Δt` is the row's age in days. `α` defaults to 0.7 — semantic still
+    # leads, but recency breaks ties on queries like "lately". `τ` defaults
+    # to 30 days for general queries; per-query overrides flow through
+    # `time_window_days` ("lately" → 14, "ever" → None which disables
+    # recency entirely).
+    #
+    # HNSW only fires when `ORDER BY` is the pure cosine-distance operator,
+    # so we use a two-stage CTE: HNSW picks the top-K · OVERFETCH candidates
+    # by similarity, then the outer query reranks them by the combined
+    # score. With OVERFETCH = 4 and limit ≤ 10, the candidate set stays
+    # under 40 rows — recency reranking can't surface anything outside
+    # that window, but at our corpus sizes the recall hit is negligible
+    # and the latency stays bounded.
+    _RECENCY_OVERFETCH = 4
+    DEFAULT_RECALL_ALPHA = 0.7
+    DEFAULT_RECALL_TAU_DAYS = 30
+
+    async def search_recall(
+        self,
+        query: str,
+        limit: int = 10,
+        time_window_days: int | None = DEFAULT_RECALL_TAU_DAYS,
+        alpha: float = DEFAULT_RECALL_ALPHA,
+    ) -> list[dict]:
+        """Semantic search over recall memory, optionally recency-boosted.
+
+        Default behavior (since #29): semantic similarity is blended with
+        an exponential recency decay. Pass ``time_window_days=None`` to
+        disable recency (the "ever" override) and recover pure semantic
+        ranking; pass a smaller value for "lately"-class queries.
+
+        ``alpha`` weights semantic similarity in the combined score; it
+        defaults to ``0.7`` so semantic still leads. The combined score is
+        surfaced as ``score`` so the RRF combiner in #28 can fuse this
+        ranked list with the BM25 list returned by ``search_bm25``.
+        """
         if not self._db_factory or not self._llm:
             return []
-
         if not query or not query.strip():
             logger.warning("search_recall_empty_query")
             return []
+        if limit < 1:
+            logger.warning("search_recall_invalid_limit", limit=limit)
+            limit = 10
 
         try:
             query_embedding = await self._llm.embed(query)
@@ -87,23 +126,90 @@ class MemoryManager:
 
         try:
             async with self._db_factory() as session:
-                # pgvector cosine distance operator: <=>
-                result = await session.execute(
-                    select(MemoryEvent)
-                    .where(MemoryEvent.type == "recall")
-                    .order_by(MemoryEvent.embedding.cosine_distance(query_embedding))
-                    .limit(limit)
-                )
-                events = result.scalars().all()
+                # Stage 1: HNSW picks candidates by pure cosine distance,
+                # so the index is actually used. Going through the ORM
+                # column expression is what makes pgvector bind the list
+                # correctly — raw `text(":v AS vector")` fails on asyncpg.
+                distance = MemoryEvent.embedding.cosine_distance(query_embedding)
+                if time_window_days is None:
+                    # "Ever" — semantic-only, no rerank.
+                    result = await session.execute(
+                        select(
+                            MemoryEvent.id,
+                            MemoryEvent.content,
+                            MemoryEvent.importance_score,
+                            MemoryEvent.created_at,
+                            (1 - distance).label("sim"),
+                            (1 - distance).label("score"),
+                        )
+                        .where(
+                            and_(
+                                MemoryEvent.type == "recall",
+                                MemoryEvent.embedding.is_not(None),
+                            )
+                        )
+                        .order_by(distance)
+                        .limit(limit)
+                    )
+                    rows = result.mappings().all()
+                else:
+                    if time_window_days <= 0:
+                        logger.warning(
+                            "search_recall_invalid_tau",
+                            time_window_days=time_window_days,
+                        )
+                        time_window_days = self.DEFAULT_RECALL_TAU_DAYS
+                    bounded_alpha = max(0.0, min(1.0, alpha))
+                    overfetch = limit * self._RECENCY_OVERFETCH
+                    cands = (
+                        select(
+                            MemoryEvent.id.label("id"),
+                            MemoryEvent.content.label("content"),
+                            MemoryEvent.importance_score.label("importance_score"),
+                            MemoryEvent.created_at.label("created_at"),
+                            (1 - distance).label("sim"),
+                        )
+                        .where(
+                            and_(
+                                MemoryEvent.type == "recall",
+                                MemoryEvent.embedding.is_not(None),
+                            )
+                        )
+                        .order_by(distance)
+                        .limit(overfetch)
+                        .subquery("cands")
+                    )
+                    age_seconds = func.extract(
+                        "epoch", func.now() - cands.c.created_at
+                    )
+                    score = (
+                        literal(bounded_alpha) * cands.c.sim
+                        + (1 - literal(bounded_alpha))
+                        * func.exp(-age_seconds / 86400.0 / float(time_window_days))
+                    )
+                    result = await session.execute(
+                        select(
+                            cands.c.id,
+                            cands.c.content,
+                            cands.c.importance_score,
+                            cands.c.created_at,
+                            cands.c.sim,
+                            score.label("score"),
+                        )
+                        .order_by(score.desc(), cands.c.created_at.desc())
+                        .limit(limit)
+                    )
+                    rows = result.mappings().all()
+
                 return [
                     {
-                        "id": e.id,
-                        "content": e.content,
-                        "importance_score": e.importance_score,
-                        "created_at": e.created_at.isoformat(),
+                        "id": int(r["id"]),
+                        "content": r["content"],
+                        "importance_score": float(r["importance_score"]),
+                        "created_at": r["created_at"].isoformat(),
+                        "score": float(r["score"]),
                     }
-                    for e in events
-                    if e.embedding is not None
+                    for r in rows
                 ]
         except Exception as e:
             logger.error("recall_search_failed", error=str(e))
