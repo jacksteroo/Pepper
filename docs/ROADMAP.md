@@ -8,6 +8,7 @@ The current sequencing of this roadmap is set by ratified ADRs. When the sequenc
 - [ADR-0002](adr/0002-fifth-anchoring-principle-compounding-capability.md) — fifth anchoring principle: the system improves itself in response to its own behaviour, within human-reviewable bounds.
 - [ADR-0003](adr/0003-layer-2-is-the-active-surface.md) — Layer 2 (Intelligence + agent runtime) is the active surface for the next two sprints; Layer 1 is in maintenance.
 - [ADR-0004](adr/0004-introduce-agents-directory.md) — `agents/` directory parallel to `subsystems/`, with the same isolation rule, as the structural home for cognitive functions (reflector, monitor, researcher) the substrate phase will introduce.
+- [ADR-0011](adr/0011-layer-3-thin-clients-tailscale.md) — Layer 3 master ADR: thin clients (Capacitor mobile + Swift/WKWebView macOS) on a Tailscale-accessible FastAPI server; home server primary, operator-owned VPS as fallback. Retires the embedded-PostgreSQL desktop direction. Master for Epic 08 (issue #70).
 
 See [docs/adr/](adr/) for the full list.
 
