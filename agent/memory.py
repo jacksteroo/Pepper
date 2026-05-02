@@ -6,7 +6,7 @@ import structlog
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Optional
-from sqlalchemy import select, delete, and_
+from sqlalchemy import select, delete, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from pgvector.sqlalchemy import Vector
 from agent.models import MemoryEvent, AuditLog
@@ -107,6 +107,73 @@ class MemoryManager:
                 ]
         except Exception as e:
             logger.error("recall_search_failed", error=str(e))
+            return []
+
+    # Epic 02 (#27) — BM25 keyword search over the same recall window. Uses
+    # `ts_rank_cd` (cover-density rank) over `plainto_tsquery('english', :q)`.
+    # ts_rank_cd was chosen over plain ts_rank because it weights matches
+    # by their proximity in the document, which gives more BM25-like
+    # behavior on short memory entries where co-occurrence of terms is
+    # the strongest signal. The constant `0.1` is the default normalization
+    # weight for short documents; we let Postgres apply its defaults
+    # rather than over-tune them.
+    _BM25_SQL = text(
+        """
+        SELECT id, content, importance_score, created_at,
+               ts_rank_cd(content_tsv, plainto_tsquery('english', :q)) AS score
+        FROM memory_events
+        WHERE type = 'recall'
+          AND content_tsv @@ plainto_tsquery('english', :q)
+        ORDER BY score DESC, created_at DESC
+        LIMIT :k
+        """
+    )
+
+    async def search_bm25(self, query: str, limit: int = 10) -> list[dict]:
+        """BM25-style keyword search over recall memory.
+
+        Returns ranked rows ordered by `ts_rank_cd` descending, with
+        `created_at DESC` as the deterministic tie-breaker. Empty queries,
+        queries that produce no tsquery terms, and queries with no
+        matching rows all return ``[]``.
+
+        Recall-only by design — symmetric with `search_recall`. The RRF
+        combiner in #28 fuses the recall-side BM25 list with the
+        recall-side semantic list. Archival keyword search can be added
+        as a follow-up if comprehension data shows it's needed.
+
+        BM25 is timestamp-agnostic; #29's recency boost lives on the
+        semantic side, so this method intentionally takes no
+        `time_window_days` parameter.
+
+        Composes with `search_recall` via the RRF combiner in #28.
+        """
+        if not self._db_factory:
+            return []
+        if not query or not query.strip():
+            logger.warning("bm25_search_empty_query")
+            return []
+        if limit < 1:
+            logger.warning("bm25_search_invalid_limit", limit=limit)
+            limit = 10
+        try:
+            async with self._db_factory() as session:
+                result = await session.execute(
+                    self._BM25_SQL, {"q": query, "k": limit}
+                )
+                rows = result.mappings().all()
+                return [
+                    {
+                        "id": int(r["id"]),
+                        "content": r["content"],
+                        "importance_score": float(r["importance_score"]),
+                        "created_at": r["created_at"].isoformat(),
+                        "score": float(r["score"]),
+                    }
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error("bm25_search_failed", error=str(e))
             return []
 
     async def get_recent_recall(self, days: int = 30) -> list[MemoryEvent]:
