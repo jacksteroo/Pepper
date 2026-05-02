@@ -3,6 +3,12 @@
 Manages timed jobs: morning brief, commitment check, weekly review, and memory
 compression. All content-generation jobs now route through pepper.chat() with
 heavy=True so the skill system guides the response — no hand-rolled formatters.
+
+Epic 01 (#23): every `pepper.chat()` call from this module carries
+`trigger_source=TriggerSource.SCHEDULER` plus the job name, so #22's trace
+emitter records the turn under the correct provenance. A separate
+`reflector_trigger` Postgres NOTIFY fires once per day at 23:55 — #39's
+reflector LISTENs on that channel.
 """
 
 import structlog
@@ -10,9 +16,17 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import text
 from agent.briefs import CommitmentExtractor
 from agent.commitment_followup import CommitmentFollowup
 from agent.models import AuditLog
+from agent.traces import TriggerSource
+
+# Postgres NOTIFY channel used to signal end-of-day to the reflector
+# process (#39). The payload is intentionally signal-only — no trace
+# contents — so the LISTEN client can never interpret the channel as
+# a content sink.
+REFLECTOR_TRIGGER_CHANNEL = "reflector_trigger"
 
 logger = structlog.get_logger()
 
@@ -76,6 +90,15 @@ class PepperScheduler:
             id="commitment_followup",
             replace_existing=True,
         )
+        # Epic 01 (#23): end-of-day signal for the reflector (#39). Fires
+        # one Postgres NOTIFY on the documented channel at 23:55. Payload
+        # is signal-only — the channel is not a content sink.
+        self._scheduler.add_job(
+            self.fire_reflector_trigger,
+            CronTrigger(hour=23, minute=55),
+            id="reflector_trigger",
+            replace_existing=True,
+        )
         self._scheduler.start()
         logger.info("scheduler_started", jobs=[j.id for j in self._scheduler.get_jobs()])
 
@@ -104,6 +127,8 @@ class PepperScheduler:
             session_id=session_id,
             heavy=True,
             isolated=True,
+            trigger_source=TriggerSource.SCHEDULER,
+            scheduler_job_name="morning_brief",
         )
 
         # Guaranteed persistence: save here rather than relying on the model to
@@ -168,6 +193,8 @@ class PepperScheduler:
             session_id=session_id,
             heavy=True,
             isolated=True,
+            trigger_source=TriggerSource.SCHEDULER,
+            scheduler_job_name="commitment_check",
         )
 
         await self._send(response)
@@ -193,6 +220,8 @@ class PepperScheduler:
             session_id=session_id,
             heavy=True,
             isolated=True,
+            trigger_source=TriggerSource.SCHEDULER,
+            scheduler_job_name="weekly_review",
         )
 
         # Guaranteed persistence: save here rather than relying on the model to
@@ -241,6 +270,46 @@ class PepperScheduler:
         await self._audit("commitment_followup", f"{len(due)} items")
         logger.info("commitment_followup_sent", count=len(due))
         return message
+
+    async def fire_reflector_trigger(self) -> bool:
+        """Fire the end-of-day Postgres NOTIFY for the reflector (#39).
+
+        Payload format: `<YYYY-MM-DD>` in the local timezone — a fixed,
+        signal-only string. The reflector LISTENs on this channel and
+        kicks off its daily window query. Trace contents are NEVER
+        included in the payload. Returns True on success, False on
+        error (job is best-effort and never raises).
+        """
+        if self.pepper.db_factory is None:
+            logger.info("reflector_trigger_skipped", reason="no_db_factory")
+            return False
+        tz = ZoneInfo(self.config.TIMEZONE)
+        payload = datetime.now(tz).strftime("%Y-%m-%d")
+        try:
+            async with self.pepper.db_factory() as session:
+                # NOTIFY needs literal SQL — no bind parameters allowed
+                # in NOTIFY's payload position. The payload is a fixed-
+                # format date string we generated ourselves; no user
+                # input flows into this SQL.
+                escaped = payload.replace("'", "''")
+                await session.execute(
+                    text(f"NOTIFY {REFLECTOR_TRIGGER_CHANNEL}, '{escaped}'"),
+                )
+                await session.commit()
+            logger.info(
+                "reflector_trigger_fired",
+                channel=REFLECTOR_TRIGGER_CHANNEL,
+                payload=payload,
+            )
+            await self._audit("reflector_trigger", payload)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "reflector_trigger_failed",
+                error_type=type(exc).__name__,
+                error=str(exc)[:200],
+            )
+            return False
 
     def get_status(self) -> dict:
         return {
