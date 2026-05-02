@@ -72,6 +72,10 @@ class TestTraceImmutability:
 
 
 class TestTraceInvariants:
+    def test_trace_id_must_be_uuid(self) -> None:
+        with pytest.raises(ValueError, match="trace_id must be a valid UUID"):
+            Trace(trace_id="not-a-uuid")
+
     def test_embedding_requires_model_version(self) -> None:
         with pytest.raises(ValueError, match="embedding_model_version"):
             Trace(embedding=_embedding())

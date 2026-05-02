@@ -131,6 +131,13 @@ class Trace:
     tier: TraceTier = TraceTier.WORKING
 
     def __post_init__(self) -> None:
+        # ── Identity invariants ── fail at the contract boundary, not inside
+        # the SQLAlchemy emitter where the error message is opaque.
+        try:
+            uuid.UUID(self.trace_id)
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise ValueError(f"trace_id must be a valid UUID string: {exc}") from exc
+
         # ── Embedding invariants ──
         if self.embedding is not None:
             if not self.embedding_model_version:
