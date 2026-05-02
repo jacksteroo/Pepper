@@ -5,6 +5,7 @@
 The current sequencing of this roadmap is set by ratified ADRs. When the sequencing changes, a new ADR records why and this section is updated.
 
 - [ADR-0001](adr/0001-resequence-around-oj-calibration.md) — pause original Phases 4–6 (Knowledge / Health / Finance); sequence as substrate → inner life → subsystem expansion.
+- [ADR-0002](adr/0002-fifth-anchoring-principle-compounding-capability.md) — fifth anchoring principle: the system improves itself in response to its own behaviour, within human-reviewable bounds.
 
 See [docs/adr/](adr/) for the full list.
 

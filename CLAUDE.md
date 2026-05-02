@@ -10,7 +10,8 @@ Pepper is a sovereign, local-first AI life assistant. Think Iron Man's Pepper â€
 2. **Sovereignty**: No mandatory cloud services. Every component must have a local-only fallback.
 3. **Additive**: The system accumulates context over time. Never delete or overwrite historical data â€” compress and archive instead.
 4. **Pluggable**: Every subsystem (People, Calendar, Communications, etc.) is independently replaceable. No tight coupling between subsystems.
-5. **Self-maintaining**: Prefer designs that a maintenance agent can upgrade without human intervention.
+5. **Compounding capability** ([ADR-0002](docs/adr/0002-fifth-anchoring-principle-compounding-capability.md)): The system improves itself in response to its own behaviour, within human-reviewable bounds. Local traces drive routing, prompt, and skill optimization; changes are versioned and revertable; the agent does not silently rewrite production prompts.
+6. **Self-maintaining**: Prefer designs that a maintenance agent can upgrade without human intervention.
 
 ## Project Structure
 
