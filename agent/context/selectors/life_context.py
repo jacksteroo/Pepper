@@ -41,6 +41,11 @@ class LifeContextSelector:
         self._capability_registry = capability_registry
         self._cached_prompt: str | None = None
         self._cached_sections: dict[str, str] | None = None
+        # ``owner_name`` is read on every turn for provenance. Resolving it
+        # falls back to ``get_owner_name`` which re-parses life_context.md
+        # — cheap once but expensive on every turn for cached prompts.
+        # Cache it next to ``_cached_sections`` and invalidate together.
+        self._cached_owner_name: str | None = None
 
     def refresh(self) -> None:
         """Drop cached prompt + sections so the next ``select`` call rebuilds.
@@ -50,6 +55,7 @@ class LifeContextSelector:
         """
         self._cached_prompt = None
         self._cached_sections = None
+        self._cached_owner_name = None
 
     def prime(self, prompt: str) -> None:
         """Inject a pre-built system prompt, bypassing the lazy rebuild.
@@ -61,8 +67,17 @@ class LifeContextSelector:
         assembler in sync without re-reading the life-context file.
         """
         self._cached_prompt = prompt
-        # Sections cache stays None so the first reader still parses the file
-        # — sections aren't reachable from a primed prompt string alone.
+        # Sections + owner_name caches stay None so the first reader still
+        # parses the file — neither is reachable from a primed prompt string
+        # alone. They populate on the next ``select`` call.
+
+    def _resolve_owner_name(self) -> str:
+        """Resolve owner_name with a fail-soft fallback to empty string."""
+        try:
+            return get_owner_name(self._life_context_path, self._config)
+        except Exception:
+            # get_owner_name does its own fallback; defence in depth.
+            return ""
 
     def select(self) -> SelectorRecord:
         if self._cached_prompt is None:
@@ -74,14 +89,16 @@ class LifeContextSelector:
             self._cached_sections = get_life_context_sections(
                 self._life_context_path
             )
+            # Refresh owner_name on the cache miss path so the next N
+            # cache hits don't re-read life_context.md.
+            self._cached_owner_name = self._resolve_owner_name()
+        elif self._cached_owner_name is None:
+            # Prompt was primed (so prompt cache is hot) but owner_name was
+            # never resolved. Resolve once and cache.
+            self._cached_owner_name = self._resolve_owner_name()
 
         sections = self._cached_sections or {}
-        owner = ""
-        try:
-            owner = get_owner_name(self._life_context_path, self._config)
-        except Exception:
-            # get_owner_name does its own fallback; defence in depth.
-            owner = ""
+        owner = self._cached_owner_name or ""
 
         provenance = {
             "selector": self.name,

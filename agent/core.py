@@ -3066,6 +3066,12 @@ class PepperCore:
                 extra_system_suffix=grounding_rules_suffix,
             )
         )
+        # Persist the assembler's per-selector provenance to the active
+        # chat-turn trace so the trace builder in ``chat()`` can pick it up
+        # alongside routing/LLM data. Issue #33 (E3) will read this back to
+        # attach assembled-context provenance to the ``traces`` row — keeping
+        # _chat_impl's return signature unchanged.
+        chat_turn_logger.record_assembled_context(_assembled.provenance)
         system = _assembled.render_prompt()
         history = list(_assembled.history)
 

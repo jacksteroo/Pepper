@@ -23,20 +23,43 @@ class CapabilityBlockSelector:
 
     def __init__(self, capability_registry: Any | None = None) -> None:
         self._registry = capability_registry
+        # Cache the rendered block + available sources across turns. The
+        # block is identical to what ``build_system_prompt`` already embeds
+        # in the life-context system prompt, so it changes on the same
+        # cadence as the life-context cache (i.e. only when the registry's
+        # capability statuses change). The assembler's
+        # ``refresh_life_context`` hook calls ``refresh()`` to invalidate.
+        self._cached_block: str | None = None
+        self._cached_available: list[str] | None = None
 
-    def select(self) -> SelectorRecord:
-        block = build_capability_block(self._registry)
+    def refresh(self) -> None:
+        """Drop the cached block + available_sources list.
 
-        available: list[str] = []
+        Called by the assembler whenever ``refresh_life_context`` runs, so
+        capability changes recorded in the registry surface on the next turn.
+        """
+        self._cached_block = None
+        self._cached_available = None
+
+    def _resolve_available(self) -> list[str]:
         try:
             if self._registry is not None and hasattr(
                 self._registry, "get_available_sources"
             ):
-                available = list(self._registry.get_available_sources() or [])
+                return list(self._registry.get_available_sources() or [])
         except Exception:
             # Registry probing is fail-soft — provenance reflects what we
             # actually saw, not what we wished for.
-            available = []
+            return []
+        return []
+
+    def select(self) -> SelectorRecord:
+        if self._cached_block is None:
+            self._cached_block = build_capability_block(self._registry)
+            self._cached_available = self._resolve_available()
+
+        block = self._cached_block
+        available = list(self._cached_available or [])
 
         provenance = {
             "selector": self.name,

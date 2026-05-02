@@ -65,8 +65,12 @@ class ContextAssembler:
     # Allow core to invalidate the cached life-context system prompt after
     # a successful update_life_context tool call. Matches the previous
     # ``self._system_prompt = build_system_prompt(...)`` rebuild in core.
+    # Also resets the capability-block cache so any registry-status changes
+    # surface on the next turn (capability block is rendered into the
+    # life-context system prompt, so they share an invalidation cadence).
     def refresh_life_context(self) -> None:
         self._life_context.refresh()
+        self._capability_block.refresh()
 
     @property
     def life_context_selector(self) -> LifeContextSelector:
