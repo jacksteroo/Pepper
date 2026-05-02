@@ -120,6 +120,163 @@ async def test_build_context_no_db_returns_empty():
     assert result == ""
 
 
+# ─── Recency-adjusted semantic search (#29) ──────────────────────────────
+
+
+def _make_recency_session_factory(rows: list[dict]):
+    """Captures the compiled SQL so tests can introspect which branch ran.
+
+    The recency-on path uses a SQLAlchemy subquery + `func.exp(...)` score
+    expression; rendering with `literal_binds=True` puts the `alpha` /
+    `tau` constants into the SQL text directly so tests can assert on
+    them without depending on the (empty) params dict.
+    """
+    captured: dict = {}
+
+    class _FakeMappings:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    class _FakeResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def mappings(self):
+            return _FakeMappings(self._rows)
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def execute(self, sql, params=None):
+            try:
+                from sqlalchemy.dialects import postgresql
+
+                rendered = str(
+                    sql.compile(
+                        dialect=postgresql.dialect(),
+                        compile_kwargs={"literal_binds": True},
+                    )
+                ).lower()
+            except Exception:
+                rendered = str(sql).lower()
+            captured["rendered"] = rendered
+            captured["params"] = params or {}
+            return _FakeResult(rows)
+
+    def factory():
+        return _FakeSession()
+
+    return factory, captured
+
+
+def _stub_llm():
+    """Minimal LLM stub that satisfies search_recall's embed() call."""
+    llm = AsyncMock()
+    llm.embed.return_value = [0.1] * 768
+    return llm
+
+
+@pytest.mark.asyncio
+async def test_search_recall_uses_recency_branch_by_default():
+    """Default `time_window_days=30` must use a HNSW-overfetch subquery
+    plus an exp-decay rerank — verified via the compiled SQL string."""
+    factory, captured = _make_recency_session_factory([])
+    mm = MemoryManager(llm_client=_stub_llm(), db_session_factory=factory)
+    await mm.search_recall("matthew lately", limit=5)
+    sql = captured["rendered"]
+    # The score expression always involves an exponential decay over an
+    # `extract(epoch from now() - created_at)` term — formatting may
+    # change across SQLAlchemy versions, but those two tokens stay.
+    assert "exp(" in sql
+    assert "extract(epoch from now()" in sql
+    # The literal alpha (0.7) and tau (30) end up baked into the SQL
+    # because the score expression uses `literal()`.
+    assert "0.7" in sql
+    assert "30.0" in sql
+    # Overfetch limit on the inner subquery is k * _RECENCY_OVERFETCH.
+    assert f"limit {5 * MemoryManager._RECENCY_OVERFETCH}" in sql
+
+
+@pytest.mark.asyncio
+async def test_search_recall_disables_recency_when_window_is_none():
+    """`time_window_days=None` ('ever') skips the rerank entirely — no
+    `exp(...)`, no subquery alias, just a flat semantic ORDER BY."""
+    factory, captured = _make_recency_session_factory([])
+    mm = MemoryManager(llm_client=_stub_llm(), db_session_factory=factory)
+    await mm.search_recall(
+        "everything matthew has ever done", limit=5, time_window_days=None
+    )
+    sql = captured["rendered"]
+    assert "exp(" not in sql
+    assert "extract(epoch from now()" not in sql
+    assert "<=>" in sql
+    # The "AS cands" subquery alias only appears in the recency branch.
+    assert "as cands" not in sql
+
+
+@pytest.mark.asyncio
+async def test_search_recall_honors_lately_override():
+    factory, captured = _make_recency_session_factory([])
+    mm = MemoryManager(llm_client=_stub_llm(), db_session_factory=factory)
+    await mm.search_recall("matthew lately", limit=3, time_window_days=14)
+    assert "14.0" in captured["rendered"]
+
+
+@pytest.mark.asyncio
+async def test_search_recall_clamps_alpha():
+    factory, captured = _make_recency_session_factory([])
+    mm = MemoryManager(llm_client=_stub_llm(), db_session_factory=factory)
+    await mm.search_recall("q", limit=2, alpha=1.7)
+    assert "1.0" in captured["rendered"]
+    await mm.search_recall("q", limit=2, alpha=-0.5)
+    assert "0.0" in captured["rendered"]
+
+
+@pytest.mark.asyncio
+async def test_search_recall_recovers_from_invalid_tau():
+    factory, captured = _make_recency_session_factory([])
+    mm = MemoryManager(llm_client=_stub_llm(), db_session_factory=factory)
+    await mm.search_recall("q", limit=2, time_window_days=0)
+    # Falls back to default τ=30 rather than rejecting the call.
+    assert f"{float(MemoryManager.DEFAULT_RECALL_TAU_DAYS)}" in captured["rendered"]
+
+
+@pytest.mark.asyncio
+async def test_search_recall_invalid_limit_clamped():
+    factory, captured = _make_recency_session_factory([])
+    mm = MemoryManager(llm_client=_stub_llm(), db_session_factory=factory)
+    await mm.search_recall("q", limit=-3)
+    # default limit=10 → overfetch becomes 10 * _RECENCY_OVERFETCH.
+    assert f"limit {10 * MemoryManager._RECENCY_OVERFETCH}" in captured["rendered"]
+
+
+@pytest.mark.asyncio
+async def test_search_recall_returns_normalised_rows_with_score():
+    rows = [
+        {
+            "id": 7,
+            "content": "Matthew shipped the redesign",
+            "importance_score": 0.6,
+            "created_at": _dt(2026, 4, 28, 0, 0, 0),
+            "sim": 0.71,
+            "score": 0.85,
+        }
+    ]
+    factory, _ = _make_recency_session_factory(rows)
+    mm = MemoryManager(llm_client=_stub_llm(), db_session_factory=factory)
+    out = await mm.search_recall("matthew", limit=1)
+    assert out[0]["id"] == 7
+    assert out[0]["score"] == pytest.approx(0.85)
+    assert out[0]["created_at"] == "2026-04-28T00:00:00"
+
+
 # ─── BM25 keyword search (#27) ────────────────────────────────────────────
 
 

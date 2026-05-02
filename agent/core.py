@@ -2485,7 +2485,9 @@ class PepperCore:
             except Exception:
                 _commit_results = []
             if _commit_results:
-                _commit_text = "\n".join(f"- {r}" for r in _commit_results[:6])
+                _commit_text = "\n".join(
+                    f"- {r['content']}" for r in _commit_results[:6]
+                )
                 _commitment_response = f"From tracked memory:\n{_commit_text}"
             else:
                 # Fall back to life context open loops
@@ -3561,7 +3563,9 @@ class PepperCore:
                         try:
                             _commit_results = await self.memory.search_recall("commitment promise said would", limit=8)
                             if _commit_results:
-                                _commit_lines = "\n".join(f"- {r}" for r in _commit_results[:6])
+                                _commit_lines = "\n".join(
+                                    f"- {r['content']}" for r in _commit_results[:6]
+                                )
                                 _injected = (
                                     f"[MEMORY RESULTS — commitments/promises from past conversations:\n{_commit_lines}\n"
                                     "Use ONLY these items when answering what was committed to. "

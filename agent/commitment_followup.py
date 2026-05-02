@@ -104,7 +104,11 @@ class CommitmentFollowup:
         """
         slot = self._current_slot()
         try:
-            raw = await self.pepper.memory.search_recall("COMMITMENT", limit=limit)
+            # Open commitments span all time; #29's default 30-day recency
+            # tilt would bury old-but-still-open promises. Disable it here.
+            raw = await self.pepper.memory.search_recall(
+                "COMMITMENT", limit=limit, time_window_days=None
+            )
         except Exception as e:
             logger.warning("commitment_followup_search_failed", error=str(e))
             return []
