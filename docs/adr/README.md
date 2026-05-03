@@ -45,6 +45,7 @@ ADRs do not get deleted. Their numbers do not get reused.
 - [0004-introduce-agents-directory.md](0004-introduce-agents-directory.md) — introduce `agents/` directory parallel to `subsystems/`
 - [0005-trace-schema.md](0005-trace-schema.md) — canonical `Trace` record (Epic 01)
 - [0006-reflector-process-model.md](0006-reflector-process-model.md) — agents run as separate processes per archetype, scheduler-triggered (Epic 04)
+- [0007-optimizer-framework-gepa.md](0007-optimizer-framework-gepa.md) — GEPA selected as the prompt-optimization framework (Epic 05)
 - [0011-layer-3-thin-clients-tailscale.md](0011-layer-3-thin-clients-tailscale.md) — Layer 3 master ADR: thin clients on a Tailscale-accessible server (Epic 08)
 
-The four foundational ADRs above (0001–0004) are tracked in Epic 00: Foundations & ADRs (issue #9). ADR-0005 is the first decision record produced under Epic 01: Trace Substrate (issue #17). ADR-0006 is the first decision record produced under Epic 04: Reflection Runtime (issue #36). ADR-0011 is the master ADR for Epic 08: Layer 3 — Mobile + Desktop Thin Clients on Tailscale-Accessible Server (issue #70); sibling ADRs 0012–0016 land under that epic.
+The four foundational ADRs above (0001–0004) are tracked in Epic 00: Foundations & ADRs (issue #9). ADR-0005 is the first decision record produced under Epic 01: Trace Substrate (issue #17). ADR-0006 is the first decision record produced under Epic 04: Reflection Runtime (issue #36). ADR-0007 is the framework decision for Epic 05: DSPy/GEPA Optimization Loop (issue #43). ADR-0011 is the master ADR for Epic 08: Layer 3 — Mobile + Desktop Thin Clients on Tailscale-Accessible Server (issue #70); sibling ADRs 0012–0016 land under that epic.
