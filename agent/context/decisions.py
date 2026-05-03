@@ -35,6 +35,38 @@ def annotate(context: AssembledContext) -> dict[str, str]:
     return out
 
 
+def annotate_from_provenance(
+    selectors_dict: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    """Same as :func:`annotate` but operates on the persisted provenance dict.
+
+    Trace rows store the assembler's provenance as a JSON-serializable
+    map under ``assembled_context["selectors"]`` (per #33). The HTTP
+    layer needs to render the same human-readable reasons against those
+    stored shapes without reconstructing a live :class:`AssembledContext`.
+
+    This is the public, stable API. Callers should NOT reach into the
+    private ``_EXPLAINERS`` table — refactors to that table are free to
+    change shape so long as this function's output stays compatible.
+
+    ``selectors_dict`` is the value found at ``assembled_context["selectors"]``
+    on a persisted trace: ``{selector_name: provenance_dict, ...}``.
+    Returns ``{}`` if the input is missing or empty.
+    """
+    if not isinstance(selectors_dict, dict) or not selectors_dict:
+        return {}
+    out: dict[str, str] = {}
+    for name, prov in selectors_dict.items():
+        if not isinstance(prov, dict):
+            continue
+        explainer = _EXPLAINERS.get(name, _explain_default)
+        try:
+            out[name] = explainer(prov)
+        except Exception:
+            out[name] = f"{name}: provenance present"
+    return out
+
+
 def _explain(name: str, record: SelectorRecord) -> str:
     explainer = _EXPLAINERS.get(name, _explain_default)
     try:

@@ -75,6 +75,13 @@ from agent.traces.http import router as _traces_router  # noqa: E402
 
 app.include_router(_traces_router, prefix="/api")
 
+# Epic 01 (#34) — /memories/{id} fetch for the trace inspector's
+# expandable memory rows. Inherits the same auth + localhost-bind posture
+# as /traces (both surface RAW_PERSONAL content over loopback).
+from agent.memory_http import router as _memories_router  # noqa: E402
+
+app.include_router(_memories_router, prefix="/api")
+
 
 class ChatRequest(BaseModel):
     message: str

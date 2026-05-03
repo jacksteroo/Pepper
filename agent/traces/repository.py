@@ -238,15 +238,30 @@ class TraceRepository:
                 undefer(TraceRow.assembled_context),
                 undefer(TraceRow.tools_called),
             )
-        result = await self._session.execute(stmt)
-        rows = result.scalars().all()
-        if with_payload:
+            result = await self._session.execute(stmt)
+            rows = result.scalars().all()
             return [_row_to_trace(r) for r in rows]
+
         # Without payload, _row_to_trace would trigger lazy-load on the
         # deferred columns. Project to empty placeholders instead — list
-        # callers don't read the heavy fields.
+        # callers don't read the heavy fields. We DO project a single
+        # cheap JSONB scalar (#34): the capability_block_version key on
+        # ``assembled_context``. The inspector uses it to find the prior
+        # version without an N+1 detail-fetch loop.
+        from sqlalchemy import literal_column
+
+        cap_version_expr = literal_column(
+            "assembled_context->>'capability_block_version'"
+        ).label("capability_block_version")
+        list_stmt = stmt.add_columns(cap_version_expr)
+        result = await self._session.execute(list_stmt)
         out: list[Trace] = []
-        for r in rows:
+        for row_tuple in result.all():
+            r = row_tuple[0]
+            cap_version = row_tuple[1] if len(row_tuple) > 1 else None
+            placeholder_ctx: dict[str, Any] = {}
+            if cap_version:
+                placeholder_ctx["capability_block_version"] = cap_version
             out.append(
                 Trace(
                     trace_id=str(r.trace_id),
@@ -255,7 +270,7 @@ class TraceRepository:
                     archetype=Archetype(r.archetype),
                     scheduler_job_name=r.scheduler_job_name,
                     input=r.input,
-                    assembled_context={},
+                    assembled_context=placeholder_ctx,
                     output=r.output,
                     model_selected=r.model_selected,
                     model_version=r.model_version,

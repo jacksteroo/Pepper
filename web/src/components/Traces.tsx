@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type TraceDetail, type TraceSummary } from '../api'
 import { logError, logInfo } from '../logger'
+import TraceContextInspector from './TraceContextInspector'
 
 const styles = {
   root: { display: 'flex', height: '100%', overflow: 'hidden' as const },
@@ -49,6 +50,17 @@ const styles = {
     overflowY: 'auto' as const,
     padding: 24,
   },
+  inspectButton: {
+    marginTop: 12,
+    background: '#1e3a5f',
+    color: '#bfdbfe',
+    border: '1px solid #2a4a73',
+    borderRadius: 4,
+    padding: '6px 12px',
+    cursor: 'pointer',
+    fontSize: 12,
+    fontFamily: 'inherit',
+  },
   header: { fontSize: 18, fontWeight: 600, marginBottom: 4 },
   field: { marginTop: 16 },
   label: { fontSize: 11, color: '#888', textTransform: 'uppercase' as const, letterSpacing: 0.5 },
@@ -96,6 +108,39 @@ export default function Traces() {
   const [trigger, setTrigger] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // #34 — when set, drills into the prompt-construction inspector for the
+  // currently-selected trace. Lives at /traces/:id/context conceptually
+  // even though we don't use a router — the URL hash mirrors the route.
+  const [inspectingId, setInspectingId] = useState<string | null>(null)
+
+  // Read/write a #/traces/{id}/context fragment so the inspector deep-link
+  // is shareable across reloads (the issue calls out the route name).
+  useEffect(() => {
+    const apply = () => {
+      const m = window.location.hash.match(/^#\/traces\/([^/]+)\/context$/)
+      if (m) {
+        setInspectingId(m[1])
+        setSelectedId(m[1])
+      } else {
+        setInspectingId(null)
+      }
+    }
+    apply()
+    window.addEventListener('hashchange', apply)
+    return () => window.removeEventListener('hashchange', apply)
+  }, [])
+
+  const openInspector = (id: string) => {
+    window.location.hash = `#/traces/${id}/context`
+    setInspectingId(id)
+    logInfo('traces', 'inspector_opened', { trace_id: id })
+  }
+  const closeInspector = () => {
+    if (window.location.hash.startsWith('#/traces/')) {
+      window.location.hash = ''
+    }
+    setInspectingId(null)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -147,6 +192,16 @@ export default function Traces() {
       cancelled = true
     }
   }, [selectedId])
+
+  if (inspectingId) {
+    return (
+      <TraceContextInspector
+        traceId={inspectingId}
+        detail={detail && detail.trace_id === inspectingId ? detail : undefined}
+        onBack={closeInspector}
+      />
+    )
+  }
 
   return (
     <div style={styles.root}>
@@ -222,6 +277,12 @@ export default function Traces() {
               {formatLatency(detail.latency_ms)} · prompt:{' '}
               <code>{detail.prompt_version}</code>
             </div>
+            <button
+              style={styles.inspectButton}
+              onClick={() => openInspector(detail.trace_id)}
+            >
+              Inspect prompt construction →
+            </button>
             <div style={styles.field}>
               <div style={styles.label}>input</div>
               <div style={styles.value}>{detail.input}</div>

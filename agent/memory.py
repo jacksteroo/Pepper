@@ -33,6 +33,24 @@ class MemoryManager:
         items = list(self._working)
         return [{"role": m["role"], "content": m["content"]} for m in items[-limit:]]
 
+    def get_working_memory_with_timestamps(self, limit: int = 20) -> list[dict]:
+        """Same as :meth:`get_working_memory` but preserves the ``timestamp``
+        field stored at append time. Used by the trace inspector (#34) to
+        render per-turn timestamps when the data is available — it does
+        NOT replace ``get_working_memory`` because the LLM-facing prompt
+        history doesn't need timestamps and stripping them keeps the
+        prompt smaller.
+        """
+        items = list(self._working)
+        return [
+            {
+                "role": m.get("role"),
+                "content": m.get("content"),
+                "timestamp": m.get("timestamp"),
+            }
+            for m in items[-limit:]
+        ]
+
     def clear_working_memory(self) -> None:
         self._working.clear()
 
@@ -367,6 +385,26 @@ class MemoryManager:
             {**rows_by_id[rid], "score": rrf_scores[rid]}
             for rid in ordered_ids
         ]
+
+    async def get_by_id(self, memory_id: int) -> Optional[MemoryEvent]:
+        """Fetch a single MemoryEvent row by its primary key.
+
+        Returns ``None`` if the row does not exist or the DB factory is
+        unavailable. The full ORM row is returned — callers must take
+        care to expose only the fields they intend (#34's inspector
+        intentionally returns content + metadata, never the embedding).
+        """
+        if not self._db_factory:
+            return None
+        try:
+            async with self._db_factory() as session:
+                result = await session.execute(
+                    select(MemoryEvent).where(MemoryEvent.id == memory_id)
+                )
+                return result.scalar_one_or_none()
+        except Exception as e:
+            logger.error("memory_get_by_id_failed", memory_id=memory_id, error=str(e))
+            return None
 
     async def get_recent_recall(self, days: int = 30) -> list[MemoryEvent]:
         """Fetch recall events from the last N days."""

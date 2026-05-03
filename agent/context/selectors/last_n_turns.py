@@ -27,6 +27,7 @@ class LastNTurnsSelector:
     ) -> SelectorRecord:
         if isolated:
             history: list[dict[str, Any]] = []
+            history_with_ts: list[dict[str, Any]] = []
         else:
             try:
                 history = list(self._memory.get_working_memory(limit=limit))
@@ -34,6 +35,20 @@ class LastNTurnsSelector:
                 # Memory layer should never crash a turn — graceful degrade
                 # to empty history matches previous behaviour.
                 history = []
+            # Optional per-turn timestamps (#34) for the inspector. Falls
+            # back to the timestamp-less list when the memory manager
+            # doesn't expose the helper.
+            try:
+                if hasattr(self._memory, "get_working_memory_with_timestamps"):
+                    history_with_ts = list(
+                        self._memory.get_working_memory_with_timestamps(
+                            limit=limit,
+                        )
+                    )
+                else:
+                    history_with_ts = list(history)
+            except Exception:
+                history_with_ts = list(history)
 
         roles = [m.get("role") for m in history if isinstance(m, dict)]
         # ``last_n_turns`` (#33 required key) is the number of conversation
@@ -54,6 +69,12 @@ class LastNTurnsSelector:
                 "system": sum(1 for r in roles if r == "system"),
                 "tool": sum(1 for r in roles if r == "tool"),
             },
+            # #34 — per-turn rows (with timestamps when the memory manager
+            # exposes them) for the inspector. The LLM-facing ``content``
+            # field above stays timestamp-less to keep the prompt small;
+            # this duplicates the rows for inspection. Privacy: same content
+            # already lives in the prompt itself.
+            "content": list(history_with_ts),
         }
         return SelectorRecord(
             name=self.name,

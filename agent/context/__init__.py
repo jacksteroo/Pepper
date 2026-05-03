@@ -10,7 +10,7 @@ See ``agent/context/assembler.py`` for the rendering contract and
 """
 
 from agent.context.assembler import ContextAssembler
-from agent.context.decisions import annotate
+from agent.context.decisions import annotate, annotate_from_provenance
 from agent.context.grounding_rules import render_grounding_rules
 from agent.context.types import AssembledContext, SelectorRecord, Turn
 
@@ -20,5 +20,6 @@ __all__ = [
     "SelectorRecord",
     "Turn",
     "annotate",
+    "annotate_from_provenance",
     "render_grounding_rules",
 ]

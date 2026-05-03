@@ -41,6 +41,10 @@ export interface TraceSummary {
   data_sensitivity: string
   tier: string
   scheduler_job_name: string | null
+  // #34 — projected from assembled_context so the inspector can find the
+  // previous trace with a different capability block version without
+  // issuing one detail fetch per summary.
+  capability_block_version?: string | null
 }
 
 export interface TraceDetail extends TraceSummary {
@@ -52,6 +56,31 @@ export interface TraceDetail extends TraceSummary {
   tools_called: Array<Record<string, unknown>>
   user_reaction: Record<string, unknown> | null
   embedding_model_version: string | null
+  has_embedding: boolean
+  // #34 — selector → human reason map computed off stored provenance.
+  decision_reasons: Record<string, string>
+}
+
+// Epic 01 (#34) — context inspector re-render endpoint.
+export interface RerenderPromptResponse {
+  trace_id: string
+  prompt: string
+  prompt_hash: string
+  provenance: Record<string, unknown>
+  original_provenance: Record<string, unknown>
+  matches_original: boolean
+  notes: string[]
+}
+
+// Epic 01 (#34) — single-memory fetch for inspector expandable rows.
+export interface MemoryDetail {
+  id: number
+  type: string
+  content: string
+  summary: string | null
+  importance_score: number
+  created_at: string
+  accessed_at: string | null
   has_embedding: boolean
 }
 
@@ -248,4 +277,16 @@ export const api = {
   },
 
   getTrace: (traceId: string) => req<TraceDetail>(`/traces/${traceId}`),
+
+  // Epic 01 (#34) — re-render the prompt for a trace using the live
+  // assembler. Result is in-browser only — never logged server-side.
+  rerenderPrompt: (traceId: string) =>
+    req<RerenderPromptResponse>(`/traces/${traceId}/rerender-prompt`, {
+      method: 'POST',
+    }),
+
+  // Epic 01 (#34) — fetch a single memory's content + metadata. Used by
+  // the trace inspector to expand a memory row from its provenance ID.
+  getMemory: (memoryId: string | number) =>
+    req<MemoryDetail>(`/memories/${memoryId}`),
 }

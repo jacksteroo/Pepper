@@ -109,3 +109,51 @@ def test_annotate_robust_to_garbage_provenance(tmp_path: Path) -> None:
     rec = SelectorRecord(name="life_context", content="", provenance={"x": object()})
     out = _explain("life_context", rec)
     assert isinstance(out, str)
+
+
+def test_annotate_from_provenance_matches_annotate(tmp_path: Path) -> None:
+    """Public ``annotate_from_provenance`` matches the live-context
+    ``annotate()`` output when fed the same JSON-serialized provenance.
+
+    This is the contract the HTTP layer (#34) depends on: refactors
+    inside ``decisions.py`` must keep these two paths in lockstep.
+    """
+    from agent.context import annotate_from_provenance
+
+    ctx = _ctx(
+        tmp_path,
+        memory_context="MEMORY",
+        memory_records=[
+            {"id": "a", "score": 0.9},
+            {"id": "b", "score": 0.5},
+        ],
+    )
+    live = annotate(ctx)
+
+    selectors_dict = {
+        name: rec.provenance for name, rec in ctx.selectors.items()
+    }
+    stored = annotate_from_provenance(selectors_dict)
+    assert stored == live
+
+
+def test_annotate_from_provenance_empty_returns_empty() -> None:
+    """Empty / missing provenance dict yields an empty result, never raises."""
+    from agent.context import annotate_from_provenance
+
+    assert annotate_from_provenance({}) == {}
+    assert annotate_from_provenance(None) == {}  # type: ignore[arg-type]
+
+
+def test_annotate_from_provenance_skips_non_dict_entries() -> None:
+    """Robust to legacy or malformed selector entries."""
+    from agent.context import annotate_from_provenance
+
+    out = annotate_from_provenance(
+        {
+            "life_context": {"life_context_sections_used": ["work"]},
+            "garbage": "not-a-dict",  # type: ignore[dict-item]
+        }
+    )
+    assert "life_context" in out
+    assert "garbage" not in out

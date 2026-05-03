@@ -82,6 +82,12 @@ class CapabilityBlockSelector:
             "block_chars": len(block or ""),
             "registry_present": self._registry is not None,
             "capability_block_version": version_hash,
+            # #34 — persist the rendered block in provenance so the inspector
+            # can render a real line-by-line diff against the previous trace's
+            # block (not just hash equality). Capability block is system-state
+            # derived (subsystem health, not user content), so storing it is
+            # privacy-neutral.
+            "content": block or "",
         }
         return SelectorRecord(
             name=self.name,
