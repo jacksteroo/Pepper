@@ -289,4 +289,35 @@ export const api = {
   // the trace inspector to expand a memory row from its provenance ID.
   getMemory: (memoryId: string | number) =>
     req<MemoryDetail>(`/memories/${memoryId}`),
+
+  // Epic 04 (#41) — pattern detector alerts panel.
+  listReflectorAlerts: (status: 'open' | 'dismissed' | 'filed' | 'all' = 'open') =>
+    req<{ alerts: ReflectorAlert[] }>(`/reflector/alerts?status=${status}`),
+
+  dismissReflectorAlert: (alertId: string) =>
+    req<{ ok: boolean; alert_id: string; status: string }>(
+      `/reflector/alerts/${alertId}/dismiss`,
+      { method: 'POST' },
+    ),
+
+  fileReflectorAlert: (alertId: string) =>
+    req<{ ok: boolean; alert_id: string; status: string }>(
+      `/reflector/alerts/${alertId}/file`,
+      { method: 'POST' },
+    ),
+}
+
+// Epic 04 (#41) — pattern detector alerts.
+export interface ReflectorAlert {
+  alert_id: string
+  created_at: string
+  window_start: string
+  window_end: string
+  trace_ids: string[]
+  cluster_size: number
+  confidence: number
+  summary: string
+  suggested_action: string
+  status: 'open' | 'dismissed' | 'filed'
+  metadata: Record<string, unknown>
 }

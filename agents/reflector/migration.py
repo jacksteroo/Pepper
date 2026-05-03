@@ -1,4 +1,4 @@
-"""Idempotent post-`create_all` SQL for the `reflections` table.
+"""Idempotent post-`create_all` SQL for the reflector's tables.
 
 Mirrors the shape of `agent/traces/migration.py`: SQLAlchemy's
 `create_all` cannot express partial HNSW indexes or a GIN index on a
@@ -11,6 +11,13 @@ remains the trace store's responsibility. The reflector's grants are
 left to a follow-up (the operator-level note in the #38 PR also
 applies here): until per-archetype Postgres roles land, the reflector
 process connects with the same credentials as Pepper Core.
+
+Tables covered:
+- `reflections` (#39 / #40) — partial HNSW on embedding, GIN on
+  parent_reflection_ids.
+- `pattern_alerts` (#41) — GIN on trace_ids[] so the trace-inspector
+  reverse lookup ("which alerts mention this trace?") is one
+  indexed query.
 """
 from __future__ import annotations
 
@@ -19,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 
 async def apply_reflections_migration(conn: AsyncConnection) -> None:
-    """Apply post-create_all DDL for the `reflections` table.
+    """Apply post-create_all DDL for the reflector's own tables.
 
     Idempotent. Each statement uses `IF NOT EXISTS` so re-running on
     startup is a no-op after the first successful boot.
@@ -46,6 +53,18 @@ async def apply_reflections_migration(conn: AsyncConnection) -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_reflections_parents
             ON reflections USING gin (parent_reflection_ids)
+            """
+        )
+    )
+    # #41: pattern_alerts.trace_ids is uuid[]. GIN supports the
+    # @> containment operator the trace inspector will use to find
+    # alerts that mention a given trace ("is this turn part of any
+    # surfaced cluster?").
+    await conn.execute(
+        text(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pattern_alerts_trace_ids
+            ON pattern_alerts USING gin (trace_ids)
             """
         )
     )

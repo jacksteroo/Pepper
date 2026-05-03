@@ -35,10 +35,12 @@ from agent.db import Base
 from agent.traces import TraceRepository
 from agents._shared.config import AgentRuntimeConfig
 from agents._shared.db import make_engine, make_session_factory
+from agents.reflector import alerts as _alerts  # noqa: F401  side-effect import for ORM registration
 from agents.reflector import rollup as _rollup
 from agents.reflector import store as rstore
 from agents.reflector.listener import listen_for_triggers
 from agents.reflector.migration import apply_reflections_migration
+from agents.reflector.pattern_detector import detect_patterns
 from agents.reflector.prompt import (
     PROMPT_VERSION,
     SYSTEM_PROMPT,
@@ -162,6 +164,7 @@ async def _ensure_schema(engine: AsyncEngine) -> None:
     # Side-effect imports to populate Base.metadata. We don't reference
     # the symbols, but the imports must happen.
     import agent.traces.models  # noqa: F401
+    from agents.reflector.alerts import PatternAlertRow  # noqa: F401
     from agents.reflector.store import ReflectionRow  # noqa: F401
 
     async with engine.begin() as conn:
@@ -381,6 +384,23 @@ async def _run_one_reflection(
                 window_start=exc.window_start.isoformat(),
             )
             return None
+
+    # Pattern detection runs AFTER the reflection persists (#41 spec:
+    # "Pattern detector runs nightly after the reflector"). It is
+    # best-effort: a detector failure must not invalidate the day's
+    # reflection. The reflector still returns the reflection.
+    try:
+        await detect_patterns(
+            window_start=window_start,
+            window_end=window_end,
+            session_factory=session_factory,
+        )
+    except Exception as exc:
+        logger.error(
+            "pattern_detector_failed",
+            error_type=type(exc).__name__,
+            error=str(exc)[:300],
+        )
 
     return reflection
 

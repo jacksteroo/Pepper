@@ -82,6 +82,16 @@ from agent.memory_http import router as _memories_router  # noqa: E402
 
 app.include_router(_memories_router, prefix="/api")
 
+# Epic 04 (#41) — /reflector/alerts list + dismiss/file routes for the
+# pattern-detector UI panel. Same auth + localhost-bind posture; the
+# router lives under agents/reflector/ but is mounted by core because
+# core owns the FastAPI app. (Per ADR-0004, agents/ may not import
+# from agent.core.py or subsystems/, but core mounting an agent's
+# router does not violate that — the dependency points the right way.)
+from agents.reflector.http import router as _reflector_router  # noqa: E402
+
+app.include_router(_reflector_router, prefix="/api")
+
 
 class ChatRequest(BaseModel):
     message: str

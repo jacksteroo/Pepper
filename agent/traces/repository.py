@@ -234,9 +234,17 @@ class TraceRepository:
             )
 
         if with_payload:
+            # Undefer ALL three deferred columns (assembled_context,
+            # tools_called, embedding). The docstring promises "the
+            # full row"; previously embedding was left deferred,
+            # which made `_row_to_trace`'s `r.embedding` access
+            # implicitly lazy-load and fail in async context.
+            # Discovered via #41's pattern detector consuming the
+            # vector outside the session block.
             stmt = stmt.options(
                 undefer(TraceRow.assembled_context),
                 undefer(TraceRow.tools_called),
+                undefer(TraceRow.embedding),
             )
             result = await self._session.execute(stmt)
             rows = result.scalars().all()
