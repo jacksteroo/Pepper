@@ -8,10 +8,17 @@ to traces without re-parsing the rendered system prompt.
 It does NOT add a separate string to the prompt — that would duplicate what's
 already in the life-context system prompt. ``content`` is the rendered block
 for diagnostic / test access; the assembler does not concatenate it again.
+
+#33 also emits ``capability_block_version`` — a short stable hash of the
+rendered block. Two turns with the same available-sources state share a
+version; a single capability flipping to ``not configured`` produces a new
+version. The optimizer (#45) uses this to bucket traces by capability
+configuration without storing the full block in every trace row.
 """
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from agent.context.types import SelectorRecord
@@ -61,11 +68,20 @@ class CapabilityBlockSelector:
         block = self._cached_block
         available = list(self._cached_available or [])
 
+        # 12-char sha256 prefix of the rendered block. Stable across runs
+        # (the block is deterministic given the same registry state) and
+        # cheap to compute (rendered block is ~1 KB). Treat as opaque —
+        # the optimizer uses it as a bucket key, not a versioning scheme.
+        version_hash = hashlib.sha256(
+            (block or "").encode("utf-8"),
+        ).hexdigest()[:12]
+
         provenance = {
             "selector": self.name,
             "available_sources": sorted(available),
             "block_chars": len(block or ""),
             "registry_present": self._registry is not None,
+            "capability_block_version": version_hash,
         }
         return SelectorRecord(
             name=self.name,

@@ -508,12 +508,31 @@ class MemoryManager:
         Search recall and archival for relevant memories.
         Returns a formatted context block to prepend to LLM calls.
         """
+        text, _records = await self.build_context_with_provenance(query)
+        return text
+
+    async def build_context_with_provenance(
+        self, query: str
+    ) -> tuple[str, list[dict]]:
+        """Same as ``build_context_for_query`` but also returns the rows.
+
+        Issue #33 needs structured memory IDs and scores in trace
+        provenance. Splitting the text-rendering and the result list
+        keeps the existing string contract for legacy callers while
+        giving the assembler / chat path the raw rows it needs to
+        emit ``memory_ids``.
+
+        Privacy: callers must NOT log the returned rows' ``content``
+        — only ``id`` and ``score`` belong in provenance. The rendered
+        text is the only sanctioned place ``content`` flows into the
+        LLM context.
+        """
         recall_results = await self.search_recall(query, limit=5)
         archival_results = await self.search_archival(query, limit=3)
 
         all_results = recall_results + archival_results
         if not all_results:
-            return ""
+            return "", []
 
         lines = ["[Relevant memories from your history]"]
         for r in all_results:
@@ -528,7 +547,7 @@ class MemoryManager:
             lines.append(f"• {r['content']}{age}")
         lines.append("[End memories]")
 
-        return "\n".join(lines)
+        return "\n".join(lines), all_results
 
     # ─── Admin ────────────────────────────────────────────────────────────────
 

@@ -114,6 +114,21 @@ class TraceBuilder:
             raise TypeError("assembled_context must be a dict")
         self.assembled_context = assembled_context
 
+    def set_assembled_context(
+        self, assembled_context: dict[str, Any] | None
+    ) -> None:
+        """Stamp the per-turn assembler provenance for #33.
+
+        Thin alias around :meth:`set_context` that tolerates ``None``
+        (no assembler ran for this turn — e.g. early-bail paths).
+        Empty / ``None`` becomes ``{}`` so the dataclass invariant holds
+        and the persisted JSONB column is consistent.
+        """
+        if assembled_context is None:
+            self.assembled_context = {}
+            return
+        self.set_context(assembled_context)
+
     def set_model(
         self,
         model_selected: str,

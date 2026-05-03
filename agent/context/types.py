@@ -40,6 +40,13 @@ class Turn:
     # Pre-fetched contexts (already strings — the caller fetched them in
     # parallel via gather()). Empty string means "skip / don't include".
     memory_context: str = ""
+    # Structured memory rows that produced ``memory_context``. Optional
+    # because not every code path threads them (e.g. legacy callers, or
+    # tests that hand-roll a memory string). When populated, each row
+    # SHOULD carry at minimum ``id`` and ``score`` (or ``sim``) so the
+    # provenance writer can emit ``memory_ids`` per #33. Privacy: only
+    # IDs and scores travel into provenance — never raw memory text.
+    memory_records: list[dict[str, Any]] = field(default_factory=list)
     web_context: str = ""
     routing_context: str = ""
     calendar_context: str = ""
@@ -95,14 +102,60 @@ class AssembledContext:
     selectors: dict[str, SelectorRecord] = field(default_factory=dict)
 
     @property
-    def provenance(self) -> dict[str, dict[str, Any]]:
-        """JSON-serializable provenance map, keyed by selector name.
+    def provenance(self) -> dict[str, Any]:
+        """JSON-serializable provenance map for trace persistence.
 
-        Each value is the raw provenance dict the selector emitted. #33 will
-        attach this to traces so we can answer "why did the model see X?"
-        offline.
+        Issue #33 specifies five required top-level fields that downstream
+        consumers (reflector, optimizer, JSONB queries) rely on:
+
+        - ``life_context_sections_used``: list[str]
+        - ``last_n_turns``: int
+        - ``memory_ids``: list[[uuid_str, score_float]]
+        - ``skill_match``: dict | None
+        - ``capability_block_version``: str
+
+        These live at the top level so JSONB containment queries
+        (``assembled_context @> '{"skill_match": {"skill_name": "X"}}'``)
+        work without a join. The full per-selector provenance dict is also
+        exposed under ``selectors`` for richer offline inspection.
+
+        Empty selectors must serialize as JSON ``null`` (not be omitted) so
+        the field's presence is itself a stable signal — the persisted
+        shape is consistent across turns regardless of which subsystems
+        contributed.
         """
-        return {name: rec.provenance for name, rec in self.selectors.items()}
+        selectors_view: dict[str, dict[str, Any]] = {
+            name: rec.provenance for name, rec in self.selectors.items()
+        }
+
+        def _get(name: str, key: str, default: Any) -> Any:
+            rec = self.selectors.get(name)
+            if rec is None:
+                return default
+            return rec.provenance.get(key, default)
+
+        # Memory IDs: list of [uuid_str, score_float] pairs. JSON has no
+        # tuple, so we always serialize to 2-element lists.
+        memory_ids_raw = _get("retrieved_memory", "memory_ids", []) or []
+        memory_ids: list[list[Any]] = []
+        for item in memory_ids_raw:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                memory_ids.append([item[0], item[1]])
+
+        skill_match = _get("skill_match", "skill_match", None)
+
+        return {
+            "life_context_sections_used": list(
+                _get("life_context", "life_context_sections_used", [])
+            ),
+            "last_n_turns": int(_get("last_n_turns", "last_n_turns", 0) or 0),
+            "memory_ids": memory_ids,
+            "skill_match": skill_match if skill_match is not None else None,
+            "capability_block_version": str(
+                _get("capability_block", "capability_block_version", "") or ""
+            ),
+            "selectors": selectors_view,
+        }
 
     def render_prompt(self) -> str:
         """Return the final system-prompt string.

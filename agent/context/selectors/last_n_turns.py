@@ -36,11 +36,18 @@ class LastNTurnsSelector:
                 history = []
 
         roles = [m.get("role") for m in history if isinstance(m, dict)]
+        # ``last_n_turns`` (#33 required key) is the number of conversation
+        # *turns* — not raw messages. A turn is a (user, assistant) pair, so
+        # we floor-divide message count by 2 (rounded up to capture trailing
+        # user-only turns). ``n_messages`` and ``limit`` stay for richer
+        # inspection.
+        n_turns = (len(history) + 1) // 2
         provenance = {
             "selector": self.name,
             "limit": limit,
             "isolated": isolated,
             "n_messages": len(history),
+            "last_n_turns": n_turns,
             "role_counts": {
                 "user": sum(1 for r in roles if r == "user"),
                 "assistant": sum(1 for r in roles if r == "assistant"),

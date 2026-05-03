@@ -74,7 +74,17 @@ def test_assemble_returns_messages_and_provenance(tmp_path: Path) -> None:
     assert len(msgs) == 1 + 2  # system + 2 history entries
 
     prov = asm_ctx.provenance
-    # All five named selectors must report provenance.
+    # #33: top-level provenance carries the five required keys.
+    for required in (
+        "life_context_sections_used",
+        "last_n_turns",
+        "memory_ids",
+        "skill_match",
+        "capability_block_version",
+    ):
+        assert required in prov, f"missing top-level provenance key {required}"
+    # Per-selector detail still lives under ``selectors``.
+    selectors = prov["selectors"]
     for name in (
         "life_context",
         "capability_block",
@@ -82,7 +92,7 @@ def test_assemble_returns_messages_and_provenance(tmp_path: Path) -> None:
         "skill_match",
         "last_n_turns",
     ):
-        assert name in prov, f"missing provenance for {name}"
+        assert name in selectors, f"missing provenance for {name}"
 
 
 def test_isolated_turn_drops_history(tmp_path: Path) -> None:

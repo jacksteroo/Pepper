@@ -2196,9 +2196,12 @@ class PepperCore:
 
             # Epic 01 (#22): emit a `traces` row alongside routing_events.
             # Reads model + tool_calls from the chat_turn_logger snapshot
-            # we already captured. assembled_context stays as a stub
-            # until #33 (E3) plumbs richer provenance through the chat
-            # path. Persistence is fail-soft inside `emit_trace`.
+            # we already captured. #33 (E3): assembled_context now carries
+            # the five required selector decisions
+            # (life_context_sections_used, last_n_turns, memory_ids,
+            # skill_match, capability_block_version) — see
+            # ``AssembledContext.provenance`` for the contract.
+            # Persistence is fail-soft inside `emit_trace`.
             try:
                 from agent.traces import (
                     Archetype as _Archetype,
@@ -2215,6 +2218,14 @@ class PepperCore:
                     archetype=_Archetype.ORCHESTRATOR,
                     scheduler_job_name=scheduler_job_name,
                     data_sensitivity=_DS.LOCAL_ONLY,
+                )
+                # #33: stamp assembler provenance onto the trace builder
+                # so the persisted ``traces.assembled_context`` JSONB
+                # column carries the five required selector decisions
+                # (life_context_sections_used, last_n_turns, memory_ids,
+                # skill_match, capability_block_version) for this turn.
+                tb.set_assembled_context(
+                    (trace_snapshot or {}).get("assembled_context")
                 )
                 # Pull what the existing per-turn logger already captured.
                 model_name = (trace_snapshot or {}).get("model") or ""
@@ -2949,8 +2960,24 @@ class PepperCore:
             # router classifies these as general_chat with low confidence, which
             # would otherwise strip the proactive web fetch.
             _is_explicit_web_search = bool(_EXPLICIT_WEB_SEARCH_RE.search(user_message))
+            # #33: prefer the provenance-aware method when the memory
+            # manager exposes it, so the assembler gets structured rows
+            # for ``memory_ids``. Detection is conservative — ``hasattr``
+            # always returns True for ``MagicMock`` instances that don't
+            # explicitly stub the method, so we also require the
+            # underlying method to be defined on the *class* (or on the
+            # instance via a real attribute). Falls back to the legacy
+            # text-only API otherwise.
+            _memory_cls = type(self.memory)
+            if (
+                hasattr(_memory_cls, "build_context_with_provenance")
+                or "build_context_with_provenance" in getattr(self.memory, "__dict__", {})
+            ):
+                _memory_coro = self.memory.build_context_with_provenance(user_message)
+            else:
+                _memory_coro = self.memory.build_context_for_query(user_message)
             fetch_results = await asyncio.gather(
-                self.memory.build_context_for_query(user_message),
+                _memory_coro,
                 self._maybe_search_web(user_message, skip=(
                     (
                         routing.action_mode == ActionMode.ANSWER_FROM_CONTEXT
@@ -2976,11 +3003,24 @@ class PepperCore:
                 "memory", "web", "routing", "calendar",
                 "email", "imessage", "whatsapp", "slack",
             )
+            # Memory now returns ``(text, rows)``; everything else is a
+            # plain string. Normalise both shapes into a string list and
+            # surface the rows separately for #33 provenance.
+            memory_records: list[dict] = []
             unpacked: list[str] = []
             for label, res in zip(labels, fetch_results):
                 if isinstance(res, Exception):
                     chat_logger.warning("proactive_fetch_failed", source=label, error=str(res))
                     unpacked.append("")
+                    continue
+                if label == "memory":
+                    if isinstance(res, tuple) and len(res) == 2:
+                        text, rows = res
+                        unpacked.append(text or "")
+                        memory_records = list(rows or [])
+                    else:
+                        # Defensive: unexpected return shape — degrade to text-only.
+                        unpacked.append(res or "")
                 else:
                     unpacked.append(res or "")
             (
@@ -3012,6 +3052,7 @@ class PepperCore:
             memory_context = web_context = routing_context = ""
             calendar_context = email_context = ""
             imessage_context = whatsapp_context = slack_context = ""
+            memory_records = []
             model = f"local/{self.config.DEFAULT_LOCAL_MODEL}"
 
         chat_logger.info(
@@ -3055,6 +3096,10 @@ class PepperCore:
                 isolated=isolated,
                 history_limit=_history_limit,
                 memory_context=memory_context,
+                # #33: thread structured memory rows so RetrievedMemorySelector
+                # can emit ``memory_ids`` for trace provenance. Empty on the
+                # fast path (no proactive fetch).
+                memory_records=memory_records,
                 web_context=web_context,
                 routing_context=routing_context,
                 calendar_context=calendar_context,

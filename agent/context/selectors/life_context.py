@@ -100,11 +100,18 @@ class LifeContextSelector:
         sections = self._cached_sections or {}
         owner = self._cached_owner_name or ""
 
+        # ``build_system_prompt`` embeds the entire ``life_context.md`` body
+        # verbatim into the system prompt — every section parsed from the
+        # file is therefore "used". ``life_context_sections_used`` (the #33
+        # required key) is the same list as ``sections_loaded``; we emit
+        # both so legacy consumers of ``sections_loaded`` keep working.
+        section_names = sorted(sections.keys())
         provenance = {
             "selector": self.name,
             "life_context_path": self._life_context_path,
             "owner_name": owner,
-            "sections_loaded": sorted(sections.keys()),
+            "sections_loaded": section_names,
+            "life_context_sections_used": section_names,
             "section_count": len(sections),
             "system_prompt_chars": len(self._cached_prompt or ""),
         }

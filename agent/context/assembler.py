@@ -107,7 +107,13 @@ class ContextAssembler:
             system = f"[Interface: You are responding via {turn.channel}.]\n\n" + system
 
         # 4. Retrieved memory (already fetched by caller via gather()).
-        rm_record = self._retrieved_memory.select(turn.memory_context)
+        # ``memory_records`` is optional — when present, the selector emits
+        # ``memory_ids`` for #33 provenance. Backward-compat: callers that
+        # don't thread structured rows still get a populated context block.
+        rm_record = self._retrieved_memory.select(
+            turn.memory_context,
+            memory_records=turn.memory_records,
+        )
         records[rm_record.name] = rm_record
         if rm_record.content:
             system += f"\n\n{rm_record.content}"

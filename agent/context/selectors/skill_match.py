@@ -31,6 +31,12 @@ class SkillMatchSelector:
                 "included": False,
                 "n_skills": 0,
                 "skill_names": [],
+                # #33 required key. ``None`` when no skill was matched —
+                # progressive disclosure means the model picks skills via
+                # ``skill_view``; there is no per-turn similarity match
+                # yet. Setting null here keeps the trace shape stable so
+                # JSONB queries (``skill_match IS NULL``) work uniformly.
+                "skill_match": None,
             }
             return SelectorRecord(
                 name=self.name,
@@ -53,6 +59,12 @@ class SkillMatchSelector:
             "n_skills": len(skills),
             "skill_names": sorted(names),
             "index_chars": len(index),
+            # See note above. The skills system uses progressive disclosure
+            # so there's no top-1 match to record — the model decides via
+            # ``skill_view``. When a future trigger/similarity matcher
+            # lands, populate this with ``{"skill_name", "trigger",
+            # "similarity_score"}``.
+            "skill_match": None,
         }
         return SelectorRecord(
             name=self.name,
