@@ -171,6 +171,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Paths under agent/prompts/<target>/<version>.json to evaluate.",
     )
 
+    rollback = sub.add_parser(
+        "rollback",
+        help="Mark an ACCEPTED prompt as ROLLED_BACK so the loader skips it.",
+    )
+    rollback.add_argument("--target", required=True)
+    rollback.add_argument(
+        "--version", required=True,
+        help="version_hash to roll back (look up via show-accepted).",
+    )
+
+    show_accepted = sub.add_parser(
+        "show-accepted",
+        help="List ACCEPTED prompts for a target, newest first.",
+    )
+    show_accepted.add_argument("--target", required=True)
+
     return parser
 
 
@@ -202,16 +218,23 @@ async def _cmd_optimize(args, *, adapter_factory=None) -> int:
     window_until = datetime.now(timezone.utc)
     window_since: Optional[datetime] = window_until - args.window
 
-    # Adapter resolution — see _NullAdapter docstring.
+    # Adapter resolution: tests inject ``adapter_factory``; production
+    # looks up the per-target factory in the adapter registry (#46).
+    # Falls back to ``_NullAdapter`` only when the operator passes a
+    # target with no registered adapter — that's a smoke path.
     if adapter_factory is not None:
         adapter: OptimizerAdapter = adapter_factory(args.target)
     else:
-        print(
-            f"warn: no target adapter registered for {args.target!r}; "
-            "using _NullAdapter (smoke path only — not a real metric)",
-            file=sys.stderr,
-        )
-        adapter = _NullAdapter(args.target)
+        from agent.optimizer.adapters import get_adapter  # noqa: PLC0415
+        try:
+            adapter = get_adapter(args.target)
+        except KeyError:
+            print(
+                f"warn: no target adapter registered for {args.target!r}; "
+                "using _NullAdapter (smoke path only — not a real metric)",
+                file=sys.stderr,
+            )
+            adapter = _NullAdapter(args.target)
 
     # Local import so the CLI module is importable even without the DB layer
     # (e.g. running --help in a stripped environment).
@@ -284,6 +307,12 @@ def _cmd_gate(args) -> int:
       1 — at least one path failed.
       2 — gate misuse (no paths, etc).
     """
+    # Import the adapters package for its side-effect of registering
+    # every shipped target's eval runner into ``eval_gate.EVAL_RUNNERS``.
+    # Without this, the gate would fail closed for every target — even
+    # ones whose runner is supposed to be in-tree (#46 ships
+    # context_assembly).
+    import agent.optimizer.adapters  # noqa: F401, PLC0415
     from agent.optimizer.eval_gate import (  # noqa: PLC0415 — local import to keep CLI surface light
         BYPASS_ENV_VAR,
         bypassed,
@@ -323,6 +352,79 @@ def _cmd_gate(args) -> int:
     return 0
 
 
+def _cmd_rollback(args) -> int:
+    """Roll back an ACCEPTED prompt.
+
+    Reads the candidate from agent/prompts/<target>/<version>.json,
+    flips its status to ROLLED_BACK, and writes it back. The loader
+    (``load_active_template``) then skips it on next call, falling
+    through to the next-most-recent ACCEPTED candidate (or the
+    DEFAULT_TEMPLATE if none remain).
+
+    Exit codes:
+      0 — rollback applied.
+      1 — prompt not found, not ACCEPTED, or rollback rejected.
+    """
+    from agent.optimizer.schema import PromptStatus  # noqa: PLC0415
+    from agent.optimizer.storage import (  # noqa: PLC0415
+        DEFAULT_ACCEPTED_DIR,
+        PromptStore,
+    )
+    store = PromptStore(DEFAULT_ACCEPTED_DIR)
+    cand = store.get(args.target, args.version)
+    if cand is None:
+        print(
+            f"rollback: no prompt found for target={args.target!r} "
+            f"version={args.version!r}",
+            file=sys.stderr,
+        )
+        return 1
+    if cand.status != PromptStatus.ACCEPTED:
+        print(
+            f"rollback: prompt {args.version!r} has status="
+            f"{cand.status.value!r}; only ACCEPTED prompts can be rolled back",
+            file=sys.stderr,
+        )
+        return 1
+    rolled = type(cand)(
+        target=cand.target,
+        version_hash=cand.version_hash,
+        parent_version=cand.parent_version,
+        optimizer_run_id=cand.optimizer_run_id,
+        prompt_text=cand.prompt_text,
+        eval_score=cand.eval_score,
+        status=PromptStatus.ROLLED_BACK,
+        created_at=cand.created_at,
+        sanitization=cand.sanitization,
+    )
+    store.put(rolled)
+    print(
+        f"rollback: target={args.target!r} version={args.version!r} "
+        "marked ROLLED_BACK",
+    )
+    return 0
+
+
+def _cmd_show_accepted(args) -> int:
+    from agent.optimizer.schema import PromptStatus  # noqa: PLC0415
+    from agent.optimizer.storage import (  # noqa: PLC0415
+        DEFAULT_ACCEPTED_DIR,
+        PromptStore,
+    )
+    store = PromptStore(DEFAULT_ACCEPTED_DIR)
+    accepted = store.list(args.target, status=PromptStatus.ACCEPTED)
+    if not accepted:
+        print(f"(no ACCEPTED prompts for target {args.target!r})")
+        return 0
+    for c in accepted:
+        print(
+            f"{c.version_hash}  score={c.eval_score:.4f}  "
+            f"parent={c.parent_version or '(seed)'}  "
+            f"created_at={c.created_at.isoformat()}",
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
@@ -332,6 +434,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_show_candidates(args)
     if args.cmd == "gate":
         return _cmd_gate(args)
+    if args.cmd == "rollback":
+        return _cmd_rollback(args)
+    if args.cmd == "show-accepted":
+        return _cmd_show_accepted(args)
     parser.print_help()
     return 2
 

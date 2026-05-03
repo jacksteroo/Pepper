@@ -1,0 +1,11 @@
+{
+  "target": "context_assembly",
+  "version_hash": "fdf5eb1653a78988",
+  "parent_version": "",
+  "optimizer_run_id": "baseline-extraction-46",
+  "prompt_text": "[Relevant memories from your history]\n{memory_lines}\n[End memories]",
+  "eval_score": 0.9886666666666667,
+  "status": "accepted",
+  "created_at": "2026-05-03T00:00:00+00:00",
+  "sanitization": []
+}
