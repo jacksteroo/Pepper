@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Pre-commit hook: gate versioned prompt changes on the per-target eval set.
+#
+# Detects staged files under agent/prompts/<target>/<version>.json and
+# invokes `python -m agent.optimizer gate --paths ...`. Blocks the commit
+# if any prompt fails its target's threshold (see docs/optimizer-policy.md).
+#
+# Bypass (emergency rollback only):
+#   PEPPER_BYPASS_EVAL_GATE=1 git commit ...
+# The bypass is logged loudly to stderr; the companion
+# `prepare-commit-msg-eval-gate` hook injects a `Bypassed-Eval-Gate`
+# trailer into the commit message so the bypass surfaces in `git log`.
+#
+# Install:
+#   ln -sf ../../scripts/git-hooks/pre-commit-prompt-eval-gate .git/hooks/pre-commit
+#   ln -sf ../../scripts/git-hooks/prepare-commit-msg-eval-gate .git/hooks/prepare-commit-msg
+# (or chain into an existing dispatcher — these hooks are idempotent
+# and exit 0 when no prompt files are staged.)
+
+set -euo pipefail
+IFS=$'\n'  # Defensive: never let a stray exported IFS shred newlines.
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+PY="${REPO_ROOT}/.venv/bin/python"
+PROMPTS_PATTERN='^agent/prompts/[a-z][a-z0-9_]*/[a-f0-9]{8,64}\.json$'
+
+# Collect staged versioned-prompt paths. The pre-filter regex restricts
+# basenames to [a-f0-9.] and forbids spaces/glob chars/leading `--`,
+# so `$staged` (unquoted below for newline word-splitting) is safe.
+# Filenames git would have to quote (non-ASCII) won't match the regex
+# and are silently dropped — operator should not be naming prompt files
+# with non-ASCII anyway.
+staged=$(git diff --cached --name-only --diff-filter=ACMR | grep -E "$PROMPTS_PATTERN" || true)
+
+if [[ -z "$staged" ]]; then
+  exit 0
+fi
+
+if [[ ! -x "$PY" ]]; then
+  echo "pre-commit-prompt-eval-gate: ${PY} not found; install the project venv (see README)" >&2
+  exit 1
+fi
+
+cd "$REPO_ROOT"
+echo "pre-commit-prompt-eval-gate: gating on $(echo "$staged" | wc -l | tr -d ' ') prompt(s)…"
+
+# shellcheck disable=SC2086  # we want word-splitting on $staged here.
+if ! "$PY" -m agent.optimizer gate --paths $staged; then
+  echo "" >&2
+  echo "pre-commit-prompt-eval-gate: eval gate FAILED" >&2
+  echo "  - inspect the per-prompt output above for the failing target/score" >&2
+  echo "  - bypass (only with cause): PEPPER_BYPASS_EVAL_GATE=1 git commit ..." >&2
+  exit 1
+fi
+
+echo "pre-commit-prompt-eval-gate: eval gate PASSED"
+exit 0

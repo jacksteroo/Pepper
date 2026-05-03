@@ -7,6 +7,7 @@ is covered by the runner integration test above.
 from __future__ import annotations
 
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
@@ -43,6 +44,75 @@ def test_arg_parser_optimize_minimal():
     assert args.target == "ctx_assembly"
     assert args.runner == "deterministic"  # default
     assert args.window == timedelta(days=7)
+
+
+def test_arg_parser_gate():
+    parser = _build_arg_parser()
+    args = parser.parse_args([
+        "gate",
+        "--paths", "agent/prompts/x/abcd1234.json", "agent/prompts/y/deadbeef.json",
+    ])
+    assert args.cmd == "gate"
+    assert len(args.paths) == 2
+
+
+def test_cmd_gate_passes(monkeypatch, tmp_path, capsys):
+    """Smoke: gate with a passing stub runner exits 0."""
+    from agent.optimizer import eval_gate
+    from agent.optimizer.__main__ import _cmd_gate
+
+    root = tmp_path / "agent_prompts"
+    root.mkdir()
+    monkeypatch.setattr(eval_gate, "ACCEPTED_PROMPTS_DIR", root)
+    eval_gate.register_runner("router_classifier", lambda c: 0.99)
+
+    # Build a passing prompt file via the same fixture shape used in
+    # test_eval_gate.
+    from agent.optimizer.schema import CandidatePrompt, PromptStatus
+    from agent.optimizer.storage import compute_version_hash
+    from datetime import datetime, timezone
+    text = "x"
+    vh = compute_version_hash("router_classifier", text)
+    target_dir = root / "router_classifier"
+    target_dir.mkdir()
+    p = target_dir / f"{vh}.json"
+    cand = CandidatePrompt(
+        target="router_classifier", version_hash=vh, parent_version="",
+        optimizer_run_id="r", prompt_text=text, eval_score=0.5,
+        status=PromptStatus.ACCEPTED,
+        created_at=datetime(2026, 5, 3, tzinfo=timezone.utc),
+    )
+    import json as _json
+    p.write_text(_json.dumps({
+        "target": cand.target, "version_hash": cand.version_hash,
+        "parent_version": cand.parent_version,
+        "optimizer_run_id": cand.optimizer_run_id,
+        "prompt_text": cand.prompt_text, "eval_score": cand.eval_score,
+        "status": cand.status.value,
+        "created_at": cand.created_at.isoformat(),
+        "sanitization": [],
+    }))
+
+    class A:
+        cmd = "gate"
+        paths = [p]
+    monkeypatch.delenv("PEPPER_BYPASS_EVAL_GATE", raising=False)
+    rc = _cmd_gate(A())
+    out = capsys.readouterr()
+    assert rc == 0, out.out + out.err
+
+
+def test_cmd_gate_bypass_short_circuits(monkeypatch, capsys):
+    from agent.optimizer.__main__ import _cmd_gate
+    monkeypatch.setenv("PEPPER_BYPASS_EVAL_GATE", "1")
+
+    class A:
+        cmd = "gate"
+        paths = [Path("nonexistent")]
+    rc = _cmd_gate(A())
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert "BYPASSED" in err
 
 
 def test_arg_parser_show_candidates():

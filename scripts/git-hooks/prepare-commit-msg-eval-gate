@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# prepare-commit-msg hook: inject Bypassed-Eval-Gate trailer when the
+# operator set PEPPER_BYPASS_EVAL_GATE=1 to skip the prompt eval gate.
+#
+# Runs before the editor opens, when the commit message file ($1) is
+# the right one for *this* commit (unlike pre-commit, which runs
+# before the message file exists for the new commit). Idempotent —
+# never appends the trailer twice if it's already present.
+#
+# Install:
+#   ln -sf ../../scripts/git-hooks/prepare-commit-msg-eval-gate .git/hooks/prepare-commit-msg
+#
+# Companion to pre-commit-prompt-eval-gate. See docs/optimizer-policy.md.
+
+set -euo pipefail
+
+MSG_FILE="${1:-}"
+COMMIT_SOURCE="${2:-}"
+
+# Only act when the bypass is in effect.
+if [[ "${PEPPER_BYPASS_EVAL_GATE:-0}" != "1" ]]; then
+  exit 0
+fi
+
+# Skip messages that aren't operator-authored prose (merges, squashes,
+# cherry-picks supply their own structure).
+case "$COMMIT_SOURCE" in
+  merge|squash|commit) exit 0 ;;
+esac
+
+if [[ -z "$MSG_FILE" || ! -f "$MSG_FILE" ]]; then
+  exit 0
+fi
+
+# Idempotent — only inject if the trailer isn't already present.
+if grep -q '^Bypassed-Eval-Gate:' "$MSG_FILE" 2>/dev/null; then
+  exit 0
+fi
+
+{
+  echo ""
+  echo "Bypassed-Eval-Gate: yes  # PEPPER_BYPASS_EVAL_GATE=1 — operator must justify"
+} >> "$MSG_FILE"
+
+exit 0
