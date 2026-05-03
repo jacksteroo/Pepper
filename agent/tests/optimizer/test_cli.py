@@ -102,6 +102,47 @@ def test_cmd_gate_passes(monkeypatch, tmp_path, capsys):
     assert rc == 0, out.out + out.err
 
 
+def test_cmd_gate_passes_committed_baseline(monkeypatch, tmp_path, capsys):
+    """End-to-end (regression): _cmd_gate must pass the committed
+    baseline file for context_assembly.
+
+    The bug this guards: the side-effect import of
+    ``agent.optimizer.adapters`` must run before ``EVAL_RUNNERS`` is
+    consulted. If it doesn't, the gate fails closed on the very
+    baseline this PR commits.
+    """
+    import json as _json
+
+    import agent.optimizer.eval_gate as eval_gate
+    from agent.optimizer.__main__ import _cmd_gate
+    from agent.optimizer.adapters.context_assembly import DEFAULT_TEMPLATE
+    from agent.optimizer.storage import compute_version_hash
+
+    root = tmp_path / "agent_prompts"
+    target_dir = root / "context_assembly"
+    target_dir.mkdir(parents=True)
+    monkeypatch.setattr(eval_gate, "ACCEPTED_PROMPTS_DIR", root)
+
+    vh = compute_version_hash("context_assembly", DEFAULT_TEMPLATE)
+    p = target_dir / f"{vh}.json"
+    p.write_text(_json.dumps({
+        "target": "context_assembly", "version_hash": vh,
+        "parent_version": "", "optimizer_run_id": "baseline",
+        "prompt_text": DEFAULT_TEMPLATE, "eval_score": 0.99,
+        "status": "accepted",
+        "created_at": "2026-05-03T00:00:00+00:00",
+        "sanitization": [],
+    }))
+
+    class A:
+        cmd = "gate"
+        paths = [p]
+    monkeypatch.delenv("PEPPER_BYPASS_EVAL_GATE", raising=False)
+    rc = _cmd_gate(A())
+    out = capsys.readouterr()
+    assert rc == 0, f"gate failed unexpectedly: stdout={out.out!r} stderr={out.err!r}"
+
+
 def test_cmd_gate_bypass_short_circuits(monkeypatch, capsys):
     from agent.optimizer.__main__ import _cmd_gate
     monkeypatch.setenv("PEPPER_BYPASS_EVAL_GATE", "1")

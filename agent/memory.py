@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import re
-import json
 import structlog
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Optional
 from sqlalchemy import select, delete, and_, text, func, literal
-from sqlalchemy.ext.asyncio import AsyncSession
-from pgvector.sqlalchemy import Vector
 from agent.models import MemoryEvent, AuditLog
 
 logger = structlog.get_logger()
@@ -572,7 +569,18 @@ class MemoryManager:
         if not all_results:
             return "", []
 
-        lines = ["[Relevant memories from your history]"]
+        # Render the memory-block envelope via the optimizer's
+        # template loader (#46). The active template is whichever
+        # ACCEPTED candidate the operator most recently promoted; it
+        # falls back to DEFAULT_TEMPLATE (the pre-#46 inline format)
+        # when no candidate has landed.
+        from agent.optimizer.adapters.context_assembly import (  # noqa: PLC0415 — local import keeps memory.py importable when optimizer module is absent
+            DEFAULT_TEMPLATE,
+            render_template,
+        )
+        from agent.optimizer.templates import load_active_template  # noqa: PLC0415
+
+        memory_lines: list[str] = []
         for r in all_results:
             age = ""
             try:
@@ -582,10 +590,11 @@ class MemoryManager:
                     age = f" ({delta.days}d ago)"
             except Exception:
                 pass
-            lines.append(f"• {r['content']}{age}")
-        lines.append("[End memories]")
+            memory_lines.append(f"• {r['content']}{age}")
 
-        return "\n".join(lines), all_results
+        template = load_active_template("context_assembly", DEFAULT_TEMPLATE)
+        rendered = render_template(template, "\n".join(memory_lines))
+        return rendered, all_results
 
     # ─── Admin ────────────────────────────────────────────────────────────────
 
