@@ -119,6 +119,44 @@ services:
     depends_on:
       - pepper
 
+  # ---------------------------------------------------------------------------
+  # Cognitive archetypes (ADR-0004 + ADR-0006). Each archetype runs as its
+  # own service, launched via `python -m agents.runner --archetype <name>`.
+  # The first inhabitant — `agents-reflector` — is added in #39 by
+  # uncommenting the block below and replacing `<archetype>`. Subsequent
+  # archetypes (`monitor`, `researcher`) follow the same shape.
+  #
+  # Skeleton kept here so the diff in #39 is `-#` not "invent the service".
+  # ---------------------------------------------------------------------------
+  # agents-<archetype>:
+  #   build: .
+  #   image: pepper:latest
+  #   container_name: pepper-agents-<archetype>
+  #   restart: unless-stopped
+  #   command: ["python", "-m", "agents.runner", "--archetype", "<archetype>"]
+  #   # NOTE for #39: do NOT inherit Pepper Core's full `.env` here. An
+  #   # archetype only needs POSTGRES_URL + its own archetype-specific
+  #   # vars; pulling the whole env unnecessarily widens blast radius
+  #   # (Google OAuth tokens, WhatsApp bridge token, API keys). When the
+  #   # archetype role split lands (per ADR-0005 §"Postgres roles &
+  #   # grants"), point POSTGRES_URL at the per-archetype role
+  #   # (`pepper_traces_reader` for read-only archetypes) rather than
+  #   # the superuser-equivalent `pepper:pepper`.
+  #   environment:
+  #     POSTGRES_URL: postgresql+asyncpg://pepper:pepper@postgres:5432/pepper
+  #     PYTHONPATH: /app
+  #   volumes:
+  #     # Source mounts are :ro — agents write only to Postgres, never to
+  #     # their own source tree. The shared `agent.traces.*` reader is the
+  #     # documented surface; everything else is forbidden by the lint at
+  #     # `agent/tests/test_agents_isolation.py`.
+  #     - ./agents:/app/agents:ro
+  #     - ./agent:/app/agent:ro
+  #     - ./logs:/app/logs
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
   # cloudflared:
   #   image: cloudflare/cloudflared:latest
   #   container_name: pepper-tunnel

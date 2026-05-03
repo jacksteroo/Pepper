@@ -44,7 +44,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent*", "subsystems*"]
+include = ["agent*", "agents*", "subsystems*"]
 
 [tool.ruff]
 line-length = 100
