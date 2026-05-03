@@ -1,0 +1,11 @@
+{
+  "target": "router_classifier",
+  "version_hash": "fb723d9379c1e5e1",
+  "parent_version": "",
+  "optimizer_run_id": "baseline-extraction-47",
+  "prompt_text": "{\n  \"exemplars\": [\n    {\n      \"intent_label\": \"schedule_lookup\",\n      \"query\": \"When does my flight to Boston leave?\"\n    },\n    {\n      \"intent_label\": \"person_lookup\",\n      \"query\": \"Where is Susan staying for the tournament?\"\n    },\n    {\n      \"intent_label\": \"general_chat\",\n      \"query\": \"Should I plan a trip with the family?\"\n    }\n  ],\n  \"instructions\": \"Classify the user's query into one of the supported intent labels. Return the single label that best matches; if uncertain, defer to clarification rather than guessing.\"\n}",
+  "eval_score": 0.95,
+  "status": "accepted",
+  "created_at": "2026-05-03T00:00:00+00:00",
+  "sanitization": []
+}

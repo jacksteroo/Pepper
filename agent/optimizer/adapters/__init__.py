@@ -61,3 +61,4 @@ def get_adapter(target: str) -> OptimizerAdapter:
 # adds one line here.
 
 from agent.optimizer.adapters import context_assembly  # noqa: E402, F401 — registers on import
+from agent.optimizer.adapters import router_classifier  # noqa: E402, F401 — registers on import
