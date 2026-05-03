@@ -162,6 +162,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--target", required=True)
     inspect.add_argument("--candidates-dir", type=Path, default=None)
 
+    gate = sub.add_parser(
+        "gate",
+        help="Run the pre-commit eval gate over a list of versioned-prompt paths.",
+    )
+    gate.add_argument(
+        "--paths", nargs="+", required=True, type=Path,
+        help="Paths under agent/prompts/<target>/<version>.json to evaluate.",
+    )
+
     return parser
 
 
@@ -267,6 +276,53 @@ def _cmd_show_candidates(args) -> int:
     return 0
 
 
+def _cmd_gate(args) -> int:
+    """Run the pre-commit eval gate.
+
+    Exit codes:
+      0 — every path passes its target threshold (or bypass is set).
+      1 — at least one path failed.
+      2 — gate misuse (no paths, etc).
+    """
+    from agent.optimizer.eval_gate import (  # noqa: PLC0415 — local import to keep CLI surface light
+        BYPASS_ENV_VAR,
+        bypassed,
+        evaluate_paths,
+    )
+
+    if not args.paths:
+        print("gate: no paths supplied", file=sys.stderr)
+        return 2
+
+    if bypassed():
+        print(
+            f"gate: BYPASSED via {BYPASS_ENV_VAR}=1 — "
+            "operator must justify in commit message",
+            file=sys.stderr,
+        )
+        return 0
+
+    results = evaluate_paths(list(args.paths))
+    failed = [r for r in results if not r.passed]
+    for r in results:
+        flag = "PASS" if r.passed else "FAIL"
+        line = (
+            f"gate: {flag}  target={r.target}  score={r.score:.4f}  "
+            f"threshold={r.threshold:.4f}  path={r.path}"
+        )
+        if r.notes:
+            line += f"  ({r.notes})"
+        print(line, file=sys.stderr if not r.passed else sys.stdout)
+    if failed:
+        print(
+            f"gate: {len(failed)} of {len(results)} prompts failed; "
+            f"bypass with {BYPASS_ENV_VAR}=1 only for emergency rollback",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
@@ -274,6 +330,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_cmd_optimize(args))
     if args.cmd == "show-candidates":
         return _cmd_show_candidates(args)
+    if args.cmd == "gate":
+        return _cmd_gate(args)
     parser.print_help()
     return 2
 
