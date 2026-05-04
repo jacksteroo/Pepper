@@ -309,6 +309,18 @@ export const api = {
   // Epic 06 (#55) — wait panel ("things Pepper chose not to surface").
   listWaits: (limit = 50) =>
     req<{ waits: WaitEntry[] }>(`/waits?limit=${limit}`),
+
+  // Epic 06 (#56) — explicit-thumbs feedback on a wait.
+  thumbWait: (waitTraceId: string, value: 'up' | 'down', notes?: string) =>
+    req<{
+      ok: boolean
+      feedback_id: string
+      wait_trace_id: string
+      value: 'up' | 'down'
+    }>(`/waits/${waitTraceId}/thumb`, {
+      method: 'POST',
+      body: JSON.stringify({ value, notes }),
+    }),
 }
 
 export interface WaitEntry {
@@ -319,6 +331,7 @@ export interface WaitEntry {
   until_iso: string | null
   trigger_source: string
   scheduler_job_name: string | null
+  thumb: 'up' | 'down' | null
 }
 
 // Epic 04 (#41) — pattern detector alerts.

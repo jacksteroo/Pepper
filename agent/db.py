@@ -62,6 +62,8 @@ async def init_db(config=None) -> None:
         import agent.identity_diffs  # noqa: F401  (side-effect import)
         # Epic 06 (#54) — pending_strategy_diffs table.
         import agent.strategy_diffs  # noqa: F401  (side-effect import)
+        # Epic 06 (#56) — wait_feedback table.
+        import agents.reflector.wait_evaluator  # noqa: F401  (side-effect import)
 
         # 2. Create all tables defined via Base
         await conn.run_sync(Base.metadata.create_all)

@@ -35,6 +35,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agent.auth import require_api_key
 from agent.db import get_db
 from agent.wait_tool import _try_parse_iso
+from agents.reflector.wait_evaluator import (
+    SIGNAL_THUMBS,
+    WaitFeedback,
+    WaitFeedbackRepository,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -88,10 +93,24 @@ class WaitEntry(BaseModel):
     until_iso: Optional[str] = None
     trigger_source: str
     scheduler_job_name: Optional[str] = None
+    # Epic 06 (#56) — most-recent thumb on this wait, if any.
+    thumb: Optional[str] = None  # 'up' | 'down' | None
 
 
 class WaitsListResponse(BaseModel):
     waits: list[WaitEntry]
+
+
+class ThumbRequest(BaseModel):
+    value: str  # 'up' | 'down'
+    notes: Optional[str] = None
+
+
+class ThumbResponse(BaseModel):
+    ok: bool
+    feedback_id: str
+    wait_trace_id: str
+    value: str
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
@@ -124,6 +143,30 @@ def _extract_wait_args(tools_called: Any) -> Optional[dict[str, Any]]:
             args = call.get("args")
             last_args = args if isinstance(args, dict) else {}
     return last_args
+
+
+async def _latest_thumb_value(
+    db: AsyncSession, wait_trace_id: str
+) -> Optional[str]:
+    """Return 'up' / 'down' / None for the most recent thumbs feedback
+    on a wait trace.
+
+    Reads the wait_feedback table directly. Mirrors the @>-style
+    posture of the listing query: keep the join inline so the panel
+    surface stays a single round trip.
+    """
+    try:
+        import uuid as _uuid
+
+        sid = _uuid.UUID(wait_trace_id)
+    except ValueError:
+        return None
+    repo = WaitFeedbackRepository(db)
+    rows = await repo.list_by_wait(sid, signal_type=SIGNAL_THUMBS)
+    if not rows:
+        return None
+    latest = rows[0]  # list_by_wait orders by created_at desc
+    return "up" if latest.signal_value >= 0.5 else "down"
 
 
 @router.get(
@@ -179,6 +222,9 @@ async def list_waits(
         # without bloating the trace schema.
         parsed = _try_parse_iso(until_raw) if until_raw else None
         until_iso = parsed.isoformat() if parsed else None
+        # #56 — surface the most recent thumb if any. One extra
+        # indexed query per wait; bounded by `limit`.
+        thumb = await _latest_thumb_value(db, trace_id)
         out.append(
             WaitEntry(
                 trace_id=trace_id,
@@ -188,8 +234,58 @@ async def list_waits(
                 until_iso=until_iso,
                 trigger_source=str(r[3] or ""),
                 scheduler_job_name=str(r[4]) if r[4] else None,
+                thumb=thumb,
             )
         )
 
     logger.info("waits_list", count=len(out), limit=limit)
     return WaitsListResponse(waits=out)
+
+
+@router.post(
+    "/{wait_trace_id}/thumb",
+    response_model=ThumbResponse,
+    dependencies=[Depends(require_api_key), Depends(_enforce_localhost_bind)],
+)
+async def thumb_wait(
+    wait_trace_id: str,
+    body: ThumbRequest,
+    db: AsyncSession = Depends(get_db),
+) -> ThumbResponse:
+    """Operator records an explicit-thumbs feedback signal on a wait.
+
+    Per #56 §2.3: thumb is editable — clicking again writes a new
+    `wait_feedback` row; latest by `created_at` wins.
+    """
+    if body.value not in {"up", "down"}:
+        raise HTTPException(
+            status_code=400, detail="value must be 'up' or 'down'"
+        )
+    try:
+        import uuid as _uuid
+
+        wait_trace_uuid = _uuid.UUID(wait_trace_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="wait_trace_id must be a UUID")
+
+    repo = WaitFeedbackRepository(db)
+    feedback = WaitFeedback(
+        wait_trace_id=wait_trace_uuid,
+        signal_type=SIGNAL_THUMBS,
+        signal_value=1.0 if body.value == "up" else 0.0,
+        confidence=1.0,
+        notes=body.notes,
+    )
+    await repo.append(feedback)
+    await db.commit()
+    logger.info(
+        "wait_thumb_recorded",
+        wait_trace_id=wait_trace_id,
+        value=body.value,
+    )
+    return ThumbResponse(
+        ok=True,
+        feedback_id=str(feedback.feedback_id),
+        wait_trace_id=wait_trace_id,
+        value=body.value,
+    )
