@@ -305,6 +305,20 @@ export const api = {
       `/reflector/alerts/${alertId}/file`,
       { method: 'POST' },
     ),
+
+  // Epic 06 (#55) — wait panel ("things Pepper chose not to surface").
+  listWaits: (limit = 50) =>
+    req<{ waits: WaitEntry[] }>(`/waits?limit=${limit}`),
+}
+
+export interface WaitEntry {
+  trace_id: string
+  created_at: string
+  reason: string
+  until_raw: string | null
+  until_iso: string | null
+  trigger_source: string
+  scheduler_job_name: string | null
 }
 
 // Epic 04 (#41) — pattern detector alerts.

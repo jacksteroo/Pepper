@@ -34,6 +34,7 @@ from agent.error_classifier import ClassifiedLLMError, ErrorCategory
 from agent.skills import load_all_skills
 from agent.skill_reviewer import SkillReviewer
 from agent.skill_tools import SKILL_TOOLS, execute_skill_tool
+from agent.wait_tool import WAIT_TOOLS, WaitsRegistry, execute_wait
 from agent.web_search import brave_search, brave_image_search
 from agent.routing import get_driving_time
 from agent.calendar_tools import (
@@ -445,6 +446,13 @@ class PepperCore:
                 name, args, session_id="pending_actions", skip_mcp_write_gate=True
             )
         )
+
+        # Epic 06 (#55) — wait registry. Per-session in-memory ring buffer
+        # of "this turn ended in a wait" so the scheduler can suppress the
+        # user-facing send without misclassifying restraint as failure.
+        # The persistent record lives in the trace store via the existing
+        # tools_called plumbing.
+        self.waits = WaitsRegistry()
 
     @property
     def _system_prompt(self) -> str:
@@ -4104,6 +4112,7 @@ class PepperCore:
                 + IMAGE_TOOLS
                 + SKILL_TOOLS
                 + SEND_TOOLS
+                + WAIT_TOOLS
                 + _PENDING_ACTION_TOOLS
             )
         # Phase 5: append MCP tools discovered from external servers
@@ -4632,7 +4641,17 @@ class PepperCore:
                 )
                 return result
 
-            if name == "queue_outbound_action":
+            if name == "wait":
+                # Epic 06 (#55) — first-class non-action with logged reason.
+                # The wait is recorded in the per-session registry so the
+                # scheduler can suppress the user-facing send for this turn,
+                # and into the trace's tools_called via the existing
+                # chat-turn-logger plumbing. No external side effects.
+                result = await execute_wait(
+                    args, registry=self.waits, session_id=session_id
+                )
+
+            elif name == "queue_outbound_action":
                 # Phase 6.7: model calls this when it has a draft action ready
                 # (e.g. a reply to send). Enqueues it for async user approval via
                 # the web UI rather than executing immediately.

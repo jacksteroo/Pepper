@@ -6,9 +6,10 @@ import LifeContext from './components/LifeContext'
 import Relationships from './components/Relationships'
 import Traces from './components/Traces'
 import ReflectorAlerts from './components/ReflectorAlerts'
+import Waits from './components/Waits'
 import { logInfo } from './logger'
 
-type Tab = 'chat' | 'status' | 'context' | 'relationships' | 'traces' | 'alerts'
+type Tab = 'chat' | 'status' | 'context' | 'relationships' | 'traces' | 'alerts' | 'waits'
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('chat')
@@ -38,6 +39,14 @@ export default function App() {
             // Set the hash that Traces.tsx watches AND switch tabs
             // in one motion. Without this the user clicks a trace
             // chip in the alert panel and nothing visible happens.
+            window.location.hash = `#/traces/${traceId}/context`
+            setTab('traces')
+          }}
+        />
+      )}
+      {tab === 'waits' && (
+        <Waits
+          onOpenTrace={(traceId) => {
             window.location.hash = `#/traces/${traceId}/context`
             setTab('traces')
           }}

@@ -172,6 +172,27 @@ class PepperScheduler:
             scheduler_job_name="morning_brief",
         )
 
+        # Epic 06 (#55) — wait short-circuit. If the model called the
+        # wait tool during this turn, treat the brief as a chosen
+        # non-action (success, not failure). Suppress the send + the
+        # save_to_recall, but log the wait into the audit trail and
+        # mark _last_brief so the daily slot is consumed (avoids a
+        # double-fire if the operator hits /brief/now after).
+        wait = self.pepper.waits.consume_latest(session_id)
+        if wait is not None:
+            logger.info(
+                "morning_brief_waited",
+                date=today,
+                reason_preview=wait.reason[:200],
+                until_raw=wait.until_raw,
+            )
+            await self._audit(
+                "morning_brief_waited",
+                f"Brief for {today} held back. Reason: {wait.reason[:300]}",
+            )
+            self._last_brief = datetime.utcnow()
+            return brief_text
+
         # Guaranteed persistence: save here rather than relying on the model to
         # follow the skill's save_memory instruction (skills are guidance, not
         # mandates). The morning_brief skill no longer includes a save_memory step

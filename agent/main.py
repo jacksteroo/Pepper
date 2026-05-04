@@ -92,6 +92,11 @@ from agents.reflector.http import router as _reflector_router  # noqa: E402
 
 app.include_router(_reflector_router, prefix="/api")
 
+# Epic 06 (#55): wait panel endpoint.
+from agent.waits_http import router as _waits_router  # noqa: E402
+
+app.include_router(_waits_router, prefix="/api")
+
 
 class ChatRequest(BaseModel):
     message: str

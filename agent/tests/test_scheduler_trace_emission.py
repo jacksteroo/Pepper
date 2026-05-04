@@ -34,6 +34,12 @@ def _make_pepper(*, with_db: bool = True):
     pepper.memory.save_to_recall = AsyncMock()
     pepper.memory.search_recall = AsyncMock(return_value=[])
 
+    # Epic 06 (#55) — default the per-session waits registry to "no wait"
+    # so existing tests exercise the normal send path. Tests that want to
+    # cover the wait-suppression branch override this explicitly.
+    pepper.waits = MagicMock()
+    pepper.waits.consume_latest = MagicMock(return_value=None)
+
     if with_db:
         executed_sql: list[str] = []
 
