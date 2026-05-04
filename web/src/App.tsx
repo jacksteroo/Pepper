@@ -6,9 +6,10 @@ import LifeContext from './components/LifeContext'
 import Relationships from './components/Relationships'
 import Traces from './components/Traces'
 import ReflectorAlerts from './components/ReflectorAlerts'
+import Waits from './components/Waits'
 import { logInfo } from './logger'
 
-type Tab = 'chat' | 'status' | 'context' | 'relationships' | 'traces' | 'alerts'
+type Tab = 'chat' | 'status' | 'context' | 'relationships' | 'traces' | 'alerts' | 'waits'
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('chat')
@@ -32,6 +33,7 @@ export default function App() {
       {tab === 'context' && <LifeContext />}
       {tab === 'relationships' && <Relationships />}
       {tab === 'traces' && <Traces />}
+      {tab === 'waits' && <Waits />}
       {tab === 'alerts' && (
         <ReflectorAlerts
           onOpenTrace={(traceId) => {

@@ -192,12 +192,18 @@ def render_rollup_prompt(
     window_end: datetime,
     children: Sequence[ReflectionDigest],
     previous_rollup_text: str | None,
+    wait_correctness: dict | None = None,
 ) -> str:
     """Render the user-side prompt for a weekly or monthly rollup.
 
     `tier_label` is "week" or "month" — purely a vocabulary hint for
     the LLM. The system prompt enforces the voice rules; this helper
     just lays out the inputs.
+
+    `wait_correctness` is an optional dict from
+    `agents.reflector.wait_evaluator.wait_correctness_summary`. When
+    present (weekly tier only) it is appended as a structured block so
+    the reflector can note wait-decision patterns in its weekly text.
     """
     parts: list[str] = []
     parts.append(
@@ -222,6 +228,22 @@ def render_rollup_prompt(
         for i, c in enumerate(children, start=1):
             parts.append(f"\n[{i}] {c.date}")
             parts.append(f"    {c.text.strip()}")
+
+    # Issue #56: weekly wait-correctness section.
+    if wait_correctness and tier_label == "week":
+        parts.append("")
+        parts.append("Wait decisions this week (chose not to surface):")
+        parts.append(
+            f"  Total: {wait_correctness.get('total_waits', 0)} | "
+            f"Explicit thumbs-up: {wait_correctness.get('thumbs_up', 0)} | "
+            f"Explicit thumbs-down: {wait_correctness.get('thumbs_down', 0)} | "
+            f"Auto still-relevant: {wait_correctness.get('auto_still_relevant', 0)}"
+        )
+        parts.append(
+            "You may note any patterns in these wait decisions as part of your "
+            "reflection — only if there is something genuinely notable."
+        )
+
     parts.append("")
     parts.append(
         f"Write your end-of-{tier_label} reflection now. Identify "

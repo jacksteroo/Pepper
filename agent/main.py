@@ -92,6 +92,11 @@ from agents.reflector.http import router as _reflector_router  # noqa: E402
 
 app.include_router(_reflector_router, prefix="/api")
 
+# Issue #55/#56 — /waits list + /wait-feedback thumbs endpoint.
+from agent.wait_feedback_http import router as _wait_feedback_router  # noqa: E402
+
+app.include_router(_wait_feedback_router, prefix="/api")
+
 
 class ChatRequest(BaseModel):
     message: str

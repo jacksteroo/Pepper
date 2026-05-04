@@ -402,6 +402,26 @@ async def _run_one_reflection(
             error=str(exc)[:300],
         )
 
+    # Issue #56: nightly wait-window evaluation. Best-effort — a failure
+    # here must not invalidate the reflection or pattern detection.
+    try:
+        from agents.reflector.wait_evaluator import evaluate_completed_waits
+        from agent.traces import TraceRepository as _TraceRepo
+
+        async with session_factory() as _wait_session:
+            _wait_repo = _TraceRepo(_wait_session)
+            await evaluate_completed_waits(
+                session=_wait_session,
+                traces_repo=_wait_repo,
+                since=window_start,
+            )
+    except Exception as exc:
+        logger.warning(
+            "wait_evaluator_failed",
+            error_type=type(exc).__name__,
+            error=str(exc)[:300],
+        )
+
     return reflection
 
 

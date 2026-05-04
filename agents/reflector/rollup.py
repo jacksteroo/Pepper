@@ -195,12 +195,23 @@ async def _run_rollup(
         previous = await repo.latest(tier=tier)
 
     digests = _digest_children(children, tz=tz)
+
+    # Issue #56: include wait-correctness summary in weekly rollup prompts.
+    _wait_correctness: dict | None = None
+    if tier == rstore.TIER_WEEKLY:
+        try:
+            from agents.reflector.wait_evaluator import wait_correctness_summary
+            _wait_correctness = wait_correctness_summary(since=window_start)
+        except Exception:
+            pass  # best-effort; missing wait data must not break rollup
+
     user_prompt = render_rollup_prompt(
         tier_label=tier_label,
         window_start=window_start,
         window_end=window_end,
         children=digests,
         previous_rollup_text=previous.text if previous is not None else None,
+        wait_correctness=_wait_correctness,
     )
 
     logger.info(

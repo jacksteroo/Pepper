@@ -106,6 +106,7 @@ from agent.strategies_tools import (
     execute_query_strategies,
     execute_propose_strategy_update,
 )
+from agent.wait_tool import WAIT_TOOL_SCHEMA, execute_wait
 
 logger = structlog.get_logger()
 
@@ -2238,13 +2239,21 @@ class PepperCore:
                 # column carries the five required selector decisions
                 # (life_context_sections_used, last_n_turns, memory_ids,
                 # skill_match, capability_block_version) for this turn.
-                tb.set_assembled_context(
-                    (trace_snapshot or {}).get("assembled_context")
+                assembled_ctx = dict((trace_snapshot or {}).get("assembled_context") or {})
+                # Issue #55: mark wait-traces so the UI can distinguish them.
+                # A turn is a wait when the model called the `wait` tool.
+                _tool_calls_snapshot = (trace_snapshot or {}).get("tool_calls") or []
+                _is_wait = any(
+                    (c.get("name") if isinstance(c, dict) else None) == "wait"
+                    for c in _tool_calls_snapshot
                 )
+                if _is_wait:
+                    assembled_ctx["is_wait"] = True
+                tb.set_assembled_context(assembled_ctx if assembled_ctx else None)
                 # Pull what the existing per-turn logger already captured.
                 model_name = (trace_snapshot or {}).get("model") or ""
                 tb.set_model(model_name)
-                for call in (trace_snapshot or {}).get("tool_calls") or []:
+                for call in _tool_calls_snapshot:
                     name = call.get("name") if isinstance(call, dict) else None
                     if not name:
                         continue
@@ -4114,7 +4123,7 @@ class PepperCore:
             # general_chat, and a stateless read tool the model ignores by
             # default has no downside.
             _RECALL_TOOL_NAMES = {"save_memory", "search_memory", "update_life_context", "mark_commitment_complete", "reset_memory", "search_web"}
-            tools = [t for t in MEMORY_TOOLS if t["function"]["name"] in _RECALL_TOOL_NAMES] + _PENDING_ACTION_TOOLS
+            tools = [t for t in MEMORY_TOOLS if t["function"]["name"] in _RECALL_TOOL_NAMES] + _PENDING_ACTION_TOOLS + [WAIT_TOOL_SCHEMA]
         else:
             tools = (
                 MEMORY_TOOLS
@@ -4131,6 +4140,7 @@ class PepperCore:
                 + SEND_TOOLS
                 + STRATEGY_TOOLS
                 + _PENDING_ACTION_TOOLS
+                + [WAIT_TOOL_SCHEMA]
             )
         # Phase 5: append MCP tools discovered from external servers
         mcp_tools = self.tool_router.get_mcp_tools()
@@ -4881,6 +4891,13 @@ class PepperCore:
                     f"[RESOLVED] {args.get('description', '')}", importance=0.6
                 )
                 result = {"ok": True}
+
+            elif name == "wait":
+                # Issue #55: deliberate non-action. execute_wait returns
+                # {"status": "wait", "reason": ..., "until": ...}.
+                # The trace for this turn will have output="" and
+                # tools_called includes the wait args so the UI can surface it.
+                result = await execute_wait(args)
 
             else:
                 # Route to subsystem — find which subsystem owns this tool
