@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -e ".[dev]"
 
 # Copy source
 COPY agent/ agent/
+COPY agents/ agents/
 COPY subsystems/ subsystems/
 COPY docs/ docs/
 
