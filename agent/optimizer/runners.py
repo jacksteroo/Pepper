@@ -60,6 +60,25 @@ if TYPE_CHECKING:  # pragma: no cover — type-only
 
 logger = structlog.get_logger(__name__)
 
+# ── Identity exclusion (ADR-0008, issue #52) ─────────────────────────────────
+#
+# The optimizer is explicitly forbidden from optimizing the identity and
+# questions sections of data/pepper_identity.md. Identity is a sacred artifact
+# — values and voice that Jack and Pepper author together — not a tunable
+# prompt. Silent mutation of the identity surface via optimizer runs is
+# precisely the hazard ADR-0008 §Context warns about (Pepper quietly becomes
+# someone else). The propose-then-approve diff flow is the only approved path
+# for identity changes.
+#
+# Enforcement: run_optimizer() raises ValueError if the adapter target is in
+# this set. Targets that produce identity-adjacent prompts (e.g. a reflector
+# adapter) must use a different target name for their non-identity sections.
+EXCLUDED_TARGETS: frozenset[str] = frozenset({
+    "identity",           # ## Identity section
+    "identity_questions", # ## Questions Pepper is asking about herself
+    "pepper_identity",    # catch-all alias
+})
+
 
 @runtime_checkable
 class OptimizerAdapter(Protocol):
@@ -446,7 +465,17 @@ def run_optimizer(
     fails partway through, ``record.candidate_count`` reflects the
     list size returned by the runner (i.e. what *would* have been
     written) and ``record.error`` carries the persistence error.
+
+    Raises ValueError if ``adapter.target`` is in ``EXCLUDED_TARGETS``.
+    Identity and questions sections are sacred artifacts that the optimizer
+    must not tune. See ADR-0008 and issue #52.
     """
+    if adapter.target in EXCLUDED_TARGETS:
+        raise ValueError(
+            f"run_optimizer: target {adapter.target!r} is excluded from optimizer "
+            f"tuning. Identity sections are governed by propose-then-approve "
+            f"(ADR-0008). See agent/optimizer/runners.py EXCLUDED_TARGETS."
+        )
     store = store or PromptStore()
     audit_log = audit_log or AuditLog()
     run_id = uuid.uuid4().hex

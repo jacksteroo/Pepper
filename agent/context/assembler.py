@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 from agent.context.selectors import (
     CapabilityBlockSelector,
+    IdentitySelector,
     LastNTurnsSelector,
     LifeContextSelector,
     RetrievedMemorySelector,
@@ -59,6 +60,7 @@ class ContextAssembler:
             capability_registry=capability_registry,
         )
         self._retrieved_memory = RetrievedMemorySelector()
+        self._identity = IdentitySelector()
         self._skill_match = SkillMatchSelector(skills_provider=skills_provider)
         self._last_n_turns = LastNTurnsSelector(memory_manager=memory_manager)
 
@@ -106,7 +108,16 @@ class ContextAssembler:
         if turn.channel:
             system = f"[Interface: You are responding via {turn.channel}.]\n\n" + system
 
-        # 4. Retrieved memory (already fetched by caller via gather()).
+        # 4. Identity — Pepper's self-model (values, voice, open questions).
+        #    Placed after the base system prompt so it sits "close" to the
+        #    life-context facts but is clearly a distinct block. Empty when
+        #    data/pepper_identity.md is absent (graceful degradation).
+        id_record = self._identity.select()
+        records[id_record.name] = id_record
+        if id_record.content:
+            system += f"\n\n{id_record.content}"
+
+        # 5. Retrieved memory (already fetched by caller via gather()).
         # ``memory_records`` is optional — when present, the selector emits
         # ``memory_ids`` for #33 provenance. Backward-compat: callers that
         # don't thread structured rows still get a populated context block.
@@ -118,7 +129,7 @@ class ContextAssembler:
         if rm_record.content:
             system += f"\n\n{rm_record.content}"
 
-        # 5. Other proactive contexts. These are NOT named selectors per the
+        # 6. Other proactive contexts. These are NOT named selectors per the
         #    issue but they DO contribute to the prompt — preserved here as
         #    a flat ordered append to keep byte-identical output. The Turn
         #    dataclass exposes them as plain strings.
@@ -146,13 +157,13 @@ class ContextAssembler:
         if turn.extra_system_suffix:
             system += turn.extra_system_suffix
 
-        # 6. Skills index — lazy progressive disclosure.
+        # 7. Skills index — lazy progressive disclosure.
         sk_record = self._skill_match.select(include=turn.include_skills_index)
         records[sk_record.name] = sk_record
         if sk_record.content:
             system = system + "\n\n" + sk_record.content
 
-        # 7. History.
+        # 8. History.
         ln_record = self._last_n_turns.select(
             limit=turn.history_limit,
             isolated=turn.isolated,

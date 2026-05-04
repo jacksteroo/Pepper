@@ -101,6 +101,11 @@ from agent.local_filesystem_tools import (
     extract_path_from_text,
     inspect_local_path_sync,
 )
+from agent.identity import (
+    apply_identity_diff,
+    propose_identity_diff,
+    update_identity_questions,
+)
 
 logger = structlog.get_logger()
 
@@ -323,6 +328,68 @@ _PENDING_ACTION_TOOLS = [
             },
         },
     }
+]
+
+# Issue #52 — identity governance tools (propose-then-approve + reflector write).
+# These are internal tools: propose_identity_diff is reflector-facing;
+# apply_identity_diff is executor-facing (never exposed to the LLM directly);
+# update_identity_questions is reflector-facing (no approval gate).
+_IDENTITY_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_identity_diff",
+            "description": (
+                "Propose a change to Pepper's committed identity (## Identity section of "
+                "data/pepper_identity.md). The diff is queued for Jack's review in the "
+                "Pepper status panel — it does NOT take effect until approved. "
+                "Call this when accumulated trace evidence suggests the self-model "
+                "should be updated. Never use this for speculative or ungrounded changes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "identity_section_text": {
+                        "type": "string",
+                        "description": (
+                            "The full proposed replacement body of the ## Identity section "
+                            "(not including the '## Identity' heading line)."
+                        ),
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Short rationale for the proposed change (shown as advisory).",
+                    },
+                },
+                "required": ["identity_section_text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_identity_questions",
+            "description": (
+                "Replace the '## Questions Pepper is asking about herself' section in "
+                "data/pepper_identity.md. No approval gate — this is the low-stakes "
+                "reflector self-observation path (ADR-0008). Use this to update "
+                "Pepper's active open questions based on accumulated traces."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "new_questions": {
+                        "type": "string",
+                        "description": (
+                            "The full replacement body of the Questions section "
+                            "(not including the heading line)."
+                        ),
+                    },
+                },
+                "required": ["new_questions"],
+            },
+        },
+    },
 ]
 
 IMAGE_TOOLS = [
@@ -4704,6 +4771,29 @@ class PepperCore:
                 # rebuilt prompt so subsequent turns see the new context.
                 self.assembler.refresh_life_context()
                 result = {"ok": True, "message": f"Updated section: {args['section']}"}
+
+            elif name == "propose_identity_diff":
+                # Issue #52 — reflector proposes an identity change; goes to
+                # pending-actions queue for Jack's approval (ADR-0008).
+                result = propose_identity_diff(
+                    args.get("identity_section_text", ""),
+                    pending_actions=self.pending_actions,
+                    description=args.get("description", ""),
+                )
+
+            elif name == "apply_identity_diff":
+                # Issue #52 — called by the pending-actions executor after Jack
+                # approves a diff. Never exposed to the LLM in the tool list.
+                result = apply_identity_diff(args)
+                # Invalidate identity cache so the next turn renders the new block.
+                from agent import identity as _identity_mod
+                _identity_mod._invalidate_cache()
+
+            elif name == "update_identity_questions":
+                # Issue #52 — reflector free-write path; no approval gate.
+                result = update_identity_questions(args)
+                from agent import identity as _identity_mod
+                _identity_mod._invalidate_cache()
 
             elif name == "get_driving_time":
                 api_key = self.config.GOOGLE_MAPS_API_KEY

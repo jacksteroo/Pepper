@@ -15,9 +15,11 @@ build/
 *.log
 logs/*
 
-# User-mutable state — life_context.md and any future per-user files.
-# Personal data lives under data/, never under docs/. The .gitkeep
-# survives clones so the mount target exists; everything else is local.
+# User-mutable state — life_context.md, pepper_identity.md, and any future
+# per-user files. Personal data lives under data/, never under docs/. The
+# .gitkeep survives clones so the mount target exists; everything else is local.
+# Identity governance: pepper_identity.md is covered by data/* below.
+# See ADR-0008 and issue #52 for governance model.
 data/*
 !data/.gitkeep
 
