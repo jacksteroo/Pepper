@@ -34,6 +34,10 @@ from agent.error_classifier import ClassifiedLLMError, ErrorCategory
 from agent.skills import load_all_skills
 from agent.skill_reviewer import SkillReviewer
 from agent.skill_tools import SKILL_TOOLS, execute_skill_tool
+from agent.strategies_tools import (
+    STRATEGIES_TOOLS,
+    execute_strategies_tool,
+)
 from agent.wait_tool import WAIT_TOOLS, WaitsRegistry, execute_wait
 from agent.web_search import brave_search, brave_image_search
 from agent.routing import get_driving_time
@@ -4113,6 +4117,7 @@ class PepperCore:
                 + SKILL_TOOLS
                 + SEND_TOOLS
                 + WAIT_TOOLS
+                + STRATEGIES_TOOLS
                 + _PENDING_ACTION_TOOLS
             )
         # Phase 5: append MCP tools discovered from external servers
@@ -4650,6 +4655,25 @@ class PepperCore:
                 result = await execute_wait(
                     args, registry=self.waits, session_id=session_id
                 )
+
+            elif name in {"query_strategies", "propose_strategy_update"}:
+                # Epic 06 (#54) — Strategy Hub tools. propose_strategy_update
+                # NEVER writes directly; it routes through the
+                # pending_strategy_diffs queue. query_strategies is read-only
+                # but bumps usage_count on matched rows.
+                if self.db_factory is None:
+                    result = {"error": "strategies tools require the DB"}
+                else:
+                    from agent.strategies.repository import StrategyRepository
+                    from agent.strategy_diffs import StrategyDiffRepository
+
+                    async with self.db_factory() as session:
+                        srepo = StrategyRepository(session)
+                        drepo = StrategyDiffRepository(session, srepo)
+                        result = await execute_strategies_tool(
+                            name, args, repo=srepo, diffs_repo=drepo
+                        )
+                        await session.commit()
 
             elif name == "queue_outbound_action":
                 # Phase 6.7: model calls this when it has a draft action ready

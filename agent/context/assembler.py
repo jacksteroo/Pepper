@@ -33,6 +33,7 @@ from agent.context.selectors import (
     LifeContextSelector,
     RetrievedMemorySelector,
     SkillMatchSelector,
+    StrategyBlockSelector,
 )
 from agent.context.types import AssembledContext, SelectorRecord, Turn
 from agent.identity import DEFAULT_IDENTITY_PATH
@@ -64,6 +65,10 @@ class ContextAssembler:
         # Epic 06 (#52) — identity selector. Loads `data/pepper_identity.md`
         # and renders the two-section block per ADR-0008.
         self._identity = IdentitySelector(identity_path=identity_path)
+        # Epic 06 (#54) — strategy block selector. Snapshot of active
+        # strategies is injected via `set_active_strategies()` before
+        # `assemble()` runs; ranking uses the user input.
+        self._strategy_block = StrategyBlockSelector()
         self._retrieved_memory = RetrievedMemorySelector()
         self._skill_match = SkillMatchSelector(skills_provider=skills_provider)
         self._last_n_turns = LastNTurnsSelector(memory_manager=memory_manager)
@@ -94,6 +99,10 @@ class ContextAssembler:
     def identity_selector(self) -> IdentitySelector:
         return self._identity
 
+    @property
+    def strategy_block_selector(self) -> StrategyBlockSelector:
+        return self._strategy_block
+
     def assemble(self, turn: Turn) -> AssembledContext:
         records: dict[str, SelectorRecord] = {}
 
@@ -112,6 +121,21 @@ class ContextAssembler:
         if id_record.content:
             base_system_prompt = (
                 base_system_prompt.rstrip() + "\n\n" + id_record.content
+            )
+
+        # 1b. Epic 06 (#54) — strategy block. Top-N strategies relevant
+        #     to the current input are appended after the identity. The
+        #     active-strategy snapshot is provided by the caller via
+        #     `set_active_strategies()` before `assemble()` runs. An
+        #     empty snapshot or empty user_message yields no block — no
+        #     content, no append.
+        strat_record = self._strategy_block.select(
+            situation=turn.user_message,
+        )
+        records[strat_record.name] = strat_record
+        if strat_record.content:
+            base_system_prompt = (
+                base_system_prompt.rstrip() + "\n\n" + strat_record.content
             )
 
         # 2. Capability block — diagnostic only; already embedded in the
