@@ -686,6 +686,11 @@ export default function TraceContextInspector({ traceId, detail: detailProp, onB
         currentTraceId={detail.trace_id}
       />
 
+      {/* ── Strategies (Epic 06 #54) ─────────────────────────────── */}
+      <StrategiesSection
+        provenance={prov.selectors?.strategies ?? null}
+      />
+
       {/* ── Re-render ─────────────────────────────────────────────── */}
       <div style={styles.section}>
         <div style={styles.sectionHeader}>
@@ -903,6 +908,63 @@ function CapabilityBlockSection({
               row) — version mismatch only
             </div>
           )
+        )}
+      </div>
+    </div>
+  )
+}
+
+
+// Epic 06 (#54) — strategy block provenance.
+//
+// Shows which strategies were injected into this trace's system prompt
+// and at what score. The shape comes from
+// `agent.context.selectors.strategies.StrategyBlockSelector.select()` —
+// the provenance dict carries `strategies_used: [{strategy_id, version,
+// score, confidence}]`. Legacy traces (pre-#54) have no `strategies`
+// selector entry; we render a small empty-state instead of nothing so
+// the operator knows the absence is expected, not a bug.
+interface StrategiesSectionProps {
+  provenance: Record<string, unknown> | null
+}
+
+function StrategiesSection({ provenance }: StrategiesSectionProps) {
+  const used = (provenance?.strategies_used ?? []) as Array<{
+    strategy_id?: string
+    version?: number
+    score?: number
+    confidence?: number
+  }>
+  const activeCount = (provenance?.active_count as number | undefined) ?? null
+
+  return (
+    <div style={styles.section}>
+      <div style={styles.sectionHeader}>
+        <span>Strategies</span>
+        <span style={styles.pill('#a78bfa')}>
+          {used.length === 0
+            ? activeCount === null
+              ? 'no provenance'
+              : `0 / ${activeCount} matched`
+            : `${used.length} injected`}
+        </span>
+      </div>
+      <div style={styles.sectionBody}>
+        <div style={styles.reason}>
+          Strategies the assembler injected into the system prompt for
+          this turn (Epic 06 #54). Score is keyword-overlap (v0);
+          confidence reflects usage_count plus recent confirmations.
+        </div>
+        {used.length === 0 ? (
+          <div style={styles.empty}>
+            {activeCount === null
+              ? 'This trace pre-dates the strategy block selector.'
+              : activeCount === 0
+                ? 'No active strategies in the hub yet — propose one via the model and approve it from the pending-actions queue.'
+                : 'Active strategies existed but none matched this turn’s input.'}
+          </div>
+        ) : (
+          <pre style={styles.pre}>{JSON.stringify(used, null, 2)}</pre>
         )}
       </div>
     </div>
