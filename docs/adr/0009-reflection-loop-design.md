@@ -1,76 +1,93 @@
-# ADR-0009: Reflection loop design and cadence
+# ADR-0009: Reflection loop — daily-fixed cadence, local-only, additive event-triggered
 
 - **Status:** Accepted
 - **Date:** 2026-05-03
 
 ## Context
 
-The reflector archetype (`agents/reflector/`) was established by ADR-0006 as a separate OS process that runs on a defined cadence and writes interior-voice notes to `reflection_notes`. ADR-0006 settled the *process model* (separate process, Postgres LISTEN/NOTIFY trigger, own docker service). It did not settle the *loop design*: when the reflector runs, what it reads, what it writes, what it is biased to notice, and what it is explicitly forbidden from doing.
+ADR-0006 settled the *process model* of the reflector — separate OS process per archetype, scheduler-triggered via Postgres NOTIFY. The runtime exists (#39), the rollups exist (#40), the pattern detector exists (#41), the eval rubric exists (#42). What remains to settle is the *design* of what the reflection actually tries to do — its cadence, its inputs, its outputs, what it privileges over time, and what it explicitly does not do.
 
-Epic 06 ("Inner Life Moves", #49) requires the reflector to operate on a well-specified loop before identity-doc governance (ADR-0008, #52), strategy invocation, and continuity-of-self evaluation can be built on top of it. Without a formal loop design:
+This decision gates Epic 06 (#49). The downstream issues each depend on the reflector emitting a specific output shape:
 
-- The cadence choice (daily vs weekly vs event-triggered) is implicit, and any contributor can change it without understanding the tradeoff.
-- The privileged-content list is absent, meaning the reflector prompt has no bias toward the signals that make compounding capability (ADR-0002) meaningful.
-- The output contract is open-ended — nothing prevents a future PR from adding outbound API calls or direct identity-doc writes to the reflector, which would violate both ADR-0008 and the privacy invariants in `docs/GUARDRAILS.md`.
-- The security and privacy classification of reflection notes is undocumented, creating ambiguity about whether they are RAW_PERSONAL or a less sensitive artifact.
+- #52 (PEPPER_IDENTITY seed + wiring) consumes proposed identity diffs from the reflector.
+- #54 (Strategy Hub tools + UI) consumes proposed strategy updates from the reflector.
+- #56 (Wait-action feedback) reads wait-traces and pairs them with reflection outputs.
+- #57 (Continuity-of-self eval) scores the artifacts the loop produces.
 
-Issue #50 captured this gap.
+If the cadence and exclusions are not pinned down, each downstream issue would invent its own answer. That is exactly the failure mode ADR-0006 already named ("the runtime form should match the structural rule") at the design layer.
+
+The forces that shape the decision:
+
+- **The runtime fires daily.** APScheduler in `agent/scheduler.py:fire_reflector_trigger` already runs at 23:55 local (ADR-0006 + #39). The design either accepts that cadence or has to change the scheduler.
+- **The downstream consumers want daily granularity.** #52/#54/#56 all want a pulse more recent than the existing weekly/monthly rollups. #57's continuity rubric scores day-over-day shifts.
+- **The model-routing decision is load-bearing.** Reflections aggregate raw trace contents into a single document. If the reflector ever calls a frontier model, RAW_PERSONAL data leaves the machine on every reflection — the worst possible cadence for a privacy violation.
+- **Bounded scope reduces drift hazard.** A reflector that "may modify any other table" is a reflector that mutates Pepper's self-model and her external commitments via a single uninspectable code path. The exclusions in this ADR are deliberate guardrails.
+- **Event-triggered runs are useful but should not be the default shape.** Hard-conversation flags and high-severity pattern alerts produce moments where reflection-now is more valuable than reflection-at-23:55. Folding these in as additive (not replacement) keeps the daily as the canonical surface while letting the reflector respond to the day.
 
 ## Decision
 
-Adopt the loop design specified in `docs/reflection-loop-design.md` (shipped alongside this ADR). The key commitments are:
+The reflection loop runs on a **daily-fixed cadence at 23:55 local time** as the canonical surface, with **additive event-triggered runs** for explicitly flagged events. The reflector is **local-only by default with no frontier fallback** — if the local LLM is unavailable, the day's reflection is skipped, not escalated. The reflector's outputs are **scoped** to a fixed set of tables; it does not modify identity, life context, traces, or memory directly.
 
-**Cadence:** daily-fixed (02:00 local, configurable) plus event-triggered for designated trace event types (`hard_conversation`, `identity_challenge`, `commitment_made`). Event-triggered runs are rate-limited to one per two hours and do not replace the next scheduled daily run. Daily is the correct default cadence for a personal assistant: sub-daily has poor signal-to-cost ratio (individual sessions are thin); weekly is too coarse to detect mood-state shifts or multi-day commitment drift.
+The full elaborated specification — inputs, outputs, privileged content, hard exclusions, privacy posture, and cross-references to existing components — lives in `docs/reflection-loop-design.md`.
 
-**Inputs (in priority order):** (1) traces from the last 24 hours, summarised before LLM ingestion; (2) prior reflection note, as continuity anchor; (3) `data/life_context.md`; (4) `data/pepper_identity.md` when it exists.
+Concretely the decision:
 
-**Outputs:** a single reflection note (200–600 words, interior voice, RAW_PERSONAL); optional pattern alerts to `pattern_alerts` (deterministic pre-LLM); optional candidate identity-doc diff to `pending_identity_diffs` (propose-then-approve per ADR-0008, rate-limited to one per daily run).
+- **Cadence.** Default daily (existing 23:55-local trigger). Event-triggered runs are additive and gated behind an env flag at first land. Per-turn, hourly, and weekly-only cadences are explicitly rejected.
+- **Inputs.** Trace window (last 24h, capped at `MAX_TRACES_PER_REFLECTION = 60`), previous reflection, life context, identity (when #52 lands), and prior pattern alerts (last 7 days).
+- **Outputs.** One reflection note (200–600 words, first-person, no audience-shaped framing); optional pattern alerts (#41); optional candidate identity diff via the propose-then-approve queue from ADR-0008; optional candidate strategy update via #54's queue.
+- **Privileged signals.** Recurring people, unresolved commitments, mood-state shifts, Pepper's own restraint outcomes (wait-traces from #55), self-noticed patterns. Privileging is content-side (prompt + post-processing classification), not weights-side.
+- **Exclusions.** No briefs for Jack. No external-side-effect tool calls. No direct writes to `life_context.md`, `pepper_identity.md`, the trace store, or the memory store. No frontier-model routing. No re-summarising yesterday. No self-scoring (lives in #42).
+- **Privacy posture.** Reflections are RAW_PERSONAL. The LLM call is gated by the same `LOCAL_LLM_HOSTS` allowlist `agents/reflector/main.py` already enforces. Embeddings are local-only via Ollama. Storage is local-only. The "trigger that would justify a frontier escalation" is: never, by default.
 
-**Privileged content:** the reflector is explicitly biased toward — recurring people, unresolved commitments, mood-state shifts, recurring tool failures, topics Jack mentions repeatedly, and tensions with the identity document. These are named categories with examples in `docs/reflection-loop-design.md §Privileged content`.
-
-**Scope exclusions (hard):** the reflector does not produce briefs for Jack, does not take outbound actions, does not modify any table except `reflection_notes`, `pattern_alerts`, and `pending_identity_diffs`, does not call external APIs, and does not approve its own identity-doc diffs.
-
-**Privacy:** reflection notes are RAW_PERSONAL. LLM routing defaults to local (Ollama). Frontier escalation requires explicit opt-in (`PEPPER_REFLECTION_LLM=frontier`).
-
-This decision applies to the `agents/reflector/` archetype only. It does not govern other agent archetypes (monitor, researcher) that may follow a different cadence or output contract.
+This decision applies to the daily reflector and the additive event-triggered hook only. It does not apply to the weekly or monthly rollup runs (#40) — those have their own prompts and inputs and are not in scope for this ADR.
 
 ## Consequences
 
 **Positive.**
 
-- The cadence is justified and documented, not implicit. Any change to daily-fixed requires understanding and updating the tradeoff argument here.
-- The privileged-content list gives the reflector prompt a concrete bias, moving it from "summarise the day" to "notice the things that accumulate into self-knowledge."
-- The hard scope exclusions make it impossible to accidentally extend the reflector into outbound or identity-mutating territory without an ADR update and explicit review.
-- The identity-doc diff output path is defined here and governed by ADR-0008. The two ADRs compose without conflict.
-- Reflection notes are unambiguously RAW_PERSONAL, so their access controls are governed by the same policy as traces — no separate decision is needed.
+- Downstream Epic 06 issues (#52, #54, #56, #57) have a defined output contract to build against. The reflector emits a specific shape; consumers do not have to guess.
+- Privacy posture is locked in at the design layer, not just at the runtime layer. Future contributors cannot accidentally route the reflector through a frontier provider without changing this ADR.
+- The exclusion list is concrete. If the reflector tries to grow new mutation paths, this ADR is the blocker — review pushes back against the change.
+- The cadence aligns with the rollup hierarchy already in place (#40 rolls up dailies into weeklies into monthlies). No re-derivation cost.
+- Event-triggered runs give Pepper a way to respond to flagged events without making the daily cadence variable.
 
 **Negative.**
 
-- The event-triggered path adds complexity to the scheduler and requires a `reflection_type` field in `reflection_notes` to distinguish daily from event runs. Small implementation cost; needed for downstream analytics.
-- Rate-limiting event-triggered runs to one per two hours means a burst of flagged events in a single afternoon will not all generate reflections. The daily run will capture the full window; the intra-day runs are supplemental.
-- The 200-word floor and 600-word ceiling are enforced by the prompt, not by the schema. A sufficiently instruction-following model will respect them; a weaker local model may not. The eval rubric's length-appropriateness dimension (dimension 5 in `docs/reflection-eval-rubric.md`) catches persistent violations.
+- A local-LLM-only posture means a reflection is lost on every day Ollama is down. The next day's reflection has to absorb two days of context. This is the deliberate trade against frontier exfiltration of RAW_PERSONAL data.
+- Event-triggered runs add cadence variability. The first land must include a flag so we can observe behaviour before defaulting it on.
+- The 60-trace cap is a salience-vs-completeness trade. On busy days, low-frequency-but-important signals can drop below the cap. Mitigated by the privileged-content list, which biases what survives sorting.
+- The reflector cannot self-correct mid-month if the design needs adjustment — that requires a new ADR. This is a feature, not a bug, by ADR-0002 (compounding capability must be inspectable and reversible).
 
 **Neutral.**
 
-- The four inputs (traces, prior reflection, life_context, identity doc) are additive. Adding a fifth input in the future requires a design-doc update but not a new ADR unless the input changes the privacy boundary.
-- The local-LLM default for the reflector is consistent with the existing local default for Pepper Core. No new policy is established; an existing policy is restated in the reflector context.
+- Adds two new output channels (proposed identity diffs, proposed strategy updates) that did not exist before. Both route through approval queues, which means no new trust surface — just new productive load on existing surfaces.
+- Reflector code in `agents/reflector/main.py` does not need significant changes for this ADR alone; the design simply names the existing behaviour and the planned additions.
+
+Follow-up work this decision creates:
+
+- `docs/reflection-loop-design.md` lands alongside this ADR (already authored as part of #50).
+- The event-triggered hook is specified here but not implemented in #50; lands incrementally as a follow-up.
+- The proposed-identity-diff output channel is realised in #52.
+- The proposed-strategy-update output channel is realised in #54.
+- The wait-trace privileged signal is realised in #55 (writer) + #56 (reader).
 
 ## Alternatives considered
 
-- **Weekly cadence as default.** Rejected. See `docs/reflection-loop-design.md §Cadence` for the full argument. Summary: weekly aggregates too broadly to detect mood-state shifts, multi-day commitment drift, or recurring-person patterns at a resolution that is useful. The pattern detector in #41 catches some of this deterministically, but the LLM-generated reflection needs a narrow enough window to be grounded.
-- **Sub-daily (per-session) cadence.** Rejected. Individual sessions are thin; the reflector's signal is cumulative. Per-session reflection competes with the live interaction for LLM capacity and produces noise-level output most of the time.
-- **Event-triggered only (no fixed daily).** Rejected. A day with no flagged events would produce no reflection, breaking the continuity-anchor property — the prior-reflection input would become stale at unpredictable intervals. The fixed daily run is the backbone; event-triggered runs are supplemental.
-- **No output constraints (open-ended writes).** Rejected. An unconstrained output contract creates a surface through which future contributors can accidentally connect the reflector to outbound actions, external APIs, or identity-doc direct writes — all of which violate existing architectural commitments. The hard exclusion list exists precisely to make those violations explicit rather than accidental.
-- **Reflection notes as non-personal / shareable data.** Rejected. Reflections are high-density compressions of Jack's private life — they contain more interpretive signal per word than raw traces, not less. Classifying them as non-personal would weaken the privacy invariants in `docs/GUARDRAILS.md` at the layer most visible to future contributors.
+- **Per-turn or hourly cadence.** Rejected. Per-turn collapses into working memory (the assembler in #32 already covers it). Hourly explodes prompt count without buying continuity.
+- **Weekly-only cadence (no daily).** Rejected. Loses the granularity that #52, #54, and #56 need to ground their downstream moves on. Also forces re-derivation of weekly/monthly rollups which currently presume a daily atomic unit.
+- **Frontier-model fallback when local LLM is down.** Rejected. The reflection aggregates 24h of RAW_PERSONAL trace contents — the worst possible payload to send to a frontier provider on a recurring schedule. Skipping the day is the correct degradation.
+- **Reflector writes directly to `life_context.md` and `pepper_identity.md`.** Rejected. Violates ADR-0002 (compounding capability must be inspectable and reversible) and ADR-0008 (identity changes must be approval-gated). Routing through queues is the trade.
+- **Status quo — leave the design implicit in the runtime.** Rejected. Each downstream Epic 06 issue would re-derive the contract, and the next contributor wanting to add an output channel would have nothing to push back against.
+- **Single ADR covering both reflector design and the future researcher/monitor agents.** Rejected. The other agents do not exist yet and have different cadence forces. ADR-0006 already settled their shared process model; design ADRs should land per-archetype as the archetypes land.
 
 ## References
 
-- Issue: [#50 — Reflection loop — formal design (cadence, content)](https://github.com/jacksteroo/Pepper/issues/50).
 - Parent epic: [#49 — Inner Life Moves](https://github.com/jacksteroo/Pepper/issues/49).
-- Design document: [`docs/reflection-loop-design.md`](../reflection-loop-design.md).
-- [ADR-0002](0002-fifth-anchoring-principle-compounding-capability.md) — compounding capability (the principle this loop design serves).
-- [ADR-0005](0005-trace-schema.md) — trace store and Postgres roles; read-only contract for agent processes.
-- [ADR-0006](0006-reflector-process-model.md) — reflector process model; this ADR specifies the loop the process runs.
-- [ADR-0008](0008-pepper-identity-governance.md) — propose-then-approve identity governance; the candidate-diff output path from this ADR composes with ADR-0008's queue.
-- [`docs/reflection-eval-rubric.md`](../reflection-eval-rubric.md) — rubric for scoring individual reflection notes; the loop design must produce notes that are scoreable against that rubric.
-- [`docs/GUARDRAILS.md`](../GUARDRAILS.md) — privacy boundaries that constrain the reflector's LLM routing and data classification decisions.
+- Issue: [#50 — Reflection loop formal design](https://github.com/jacksteroo/Pepper/issues/50).
+- Companion design doc: [`docs/reflection-loop-design.md`](../reflection-loop-design.md).
+- Prior ADR: [ADR-0002 — Compounding capability](0002-fifth-anchoring-principle-compounding-capability.md).
+- Prior ADR: [ADR-0005 — Trace schema](0005-trace-schema.md).
+- Prior ADR: [ADR-0006 — Reflector process model](0006-reflector-process-model.md).
+- Prior ADR: [ADR-0008 — PEPPER_IDENTITY governance](0008-pepper-identity-governance.md).
+- Generative Agents — Park et al, [arXiv:2304.03442](https://arxiv.org/abs/2304.03442).
+- Notion: [Bringing Pepper Alive — Philosophical Foundation §5.1](https://www.notion.so/jacksteroo/Bringing-Pepper-Alive-Philosophical-Foundation-353fb7367390818aba04fd6052f5e974).
