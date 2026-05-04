@@ -58,6 +58,8 @@ async def init_db(config=None) -> None:
         # Epic 06 (#53) — strategies table. Side-effect import for ORM
         # registration on Base.metadata.
         import agent.strategies.repository  # noqa: F401  (side-effect import)
+        # Epic 06 (#52) — pending_identity_diffs table.
+        import agent.identity_diffs  # noqa: F401  (side-effect import)
 
         # 2. Create all tables defined via Base
         await conn.run_sync(Base.metadata.create_all)

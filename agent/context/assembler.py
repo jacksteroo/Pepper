@@ -28,12 +28,14 @@ from zoneinfo import ZoneInfo
 
 from agent.context.selectors import (
     CapabilityBlockSelector,
+    IdentitySelector,
     LastNTurnsSelector,
     LifeContextSelector,
     RetrievedMemorySelector,
     SkillMatchSelector,
 )
 from agent.context.types import AssembledContext, SelectorRecord, Turn
+from agent.identity import DEFAULT_IDENTITY_PATH
 
 
 class ContextAssembler:
@@ -48,6 +50,7 @@ class ContextAssembler:
         memory_manager: Any,
         skills_provider: Any,
         timezone: str,
+        identity_path: str = DEFAULT_IDENTITY_PATH,
     ) -> None:
         self._timezone = timezone
         self._life_context = LifeContextSelector(
@@ -58,6 +61,9 @@ class ContextAssembler:
         self._capability_block = CapabilityBlockSelector(
             capability_registry=capability_registry,
         )
+        # Epic 06 (#52) — identity selector. Loads `data/pepper_identity.md`
+        # and renders the two-section block per ADR-0008.
+        self._identity = IdentitySelector(identity_path=identity_path)
         self._retrieved_memory = RetrievedMemorySelector()
         self._skill_match = SkillMatchSelector(skills_provider=skills_provider)
         self._last_n_turns = LastNTurnsSelector(memory_manager=memory_manager)
@@ -72,9 +78,21 @@ class ContextAssembler:
         self._life_context.refresh()
         self._capability_block.refresh()
 
+    def refresh_identity(self) -> None:
+        """Drop the cached identity so the next turn re-reads the file.
+
+        Called by the diff-approval flow (`agent.identity_diffs.approve`)
+        and by reflector writes to the Questions section.
+        """
+        self._identity.refresh()
+
     @property
     def life_context_selector(self) -> LifeContextSelector:
         return self._life_context
+
+    @property
+    def identity_selector(self) -> IdentitySelector:
+        return self._identity
 
     def assemble(self, turn: Turn) -> AssembledContext:
         records: dict[str, SelectorRecord] = {}
@@ -83,6 +101,18 @@ class ContextAssembler:
         lc_record = self._life_context.select()
         records[lc_record.name] = lc_record
         base_system_prompt = lc_record.content or ""
+
+        # 1a. Epic 06 (#52) — identity block per ADR-0008. Appended to
+        #     the base system prompt before time/channel headers so the
+        #     identity sits next to the life-context content the operator
+        #     authored. Empty record (missing file or parse error) skips
+        #     the append cleanly.
+        id_record = self._identity.select()
+        records[id_record.name] = id_record
+        if id_record.content:
+            base_system_prompt = (
+                base_system_prompt.rstrip() + "\n\n" + id_record.content
+            )
 
         # 2. Capability block — diagnostic only; already embedded in the
         #    life-context system prompt. We record provenance so #33 can

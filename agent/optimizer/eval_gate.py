@@ -89,6 +89,19 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
 KNOWN_TARGETS: frozenset[str] = frozenset(DEFAULT_THRESHOLDS)
 
 
+# Epic 06 (#52, ADR-0008) — targets the optimizer is FORBIDDEN from
+# touching. Identity is a sacred artifact: changes flow through the
+# propose-then-approve queue, not through automated tuning. The list
+# is enforced by `register_runner` (raises if a registration would
+# shadow a forbidden target) AND by `gate` paths (refuse to evaluate a
+# prompt whose target is on this list).
+#
+# Add new entries only with an ADR justifying the exclusion.
+FORBIDDEN_TARGETS: frozenset[str] = frozenset({
+    "identity",
+})
+
+
 def threshold_for(target: str) -> float:
     """Resolve the floor score for a target.
 
@@ -145,7 +158,18 @@ def register_runner(target: str, runner: EvalRunner) -> None:
     Targets call this at import-time from their own module so the
     gate's import surface stays narrow (no need to import #46's
     context-assembly stack from inside the eval_gate module itself).
+
+    Refuses to register a runner for any target on
+    ``FORBIDDEN_TARGETS`` (Epic 06 #52, ADR-0008) — these are
+    sacred artifacts that the optimizer must not tune. Adding a
+    runner for one is almost certainly a bug; failing loud catches
+    it at import time rather than during a commit-time gate.
     """
+    if target in FORBIDDEN_TARGETS:
+        raise ValueError(
+            f"target {target!r} is on FORBIDDEN_TARGETS "
+            f"(see ADR-0008); the optimizer must not tune it"
+        )
     EVAL_RUNNERS[target] = runner
 
 
@@ -210,6 +234,23 @@ def evaluate_paths(paths: list[Path]) -> list[GateResult]:
                 path=path, target="(unknown)",
                 score=0.0, threshold=1.0, passed=False,
                 notes="path outside agent/prompts/<target>/<version>.json layout",
+            ))
+            continue
+
+        # Epic 06 (#52, ADR-0008): the optimizer must not tune sacred
+        # artifacts. Refuse loud and early so a hand-edited prompt
+        # under `agent/prompts/identity/` produces a clear failure
+        # message rather than the generic "no eval runner registered".
+        if target in FORBIDDEN_TARGETS:
+            out.append(GateResult(
+                path=path, target=target,
+                score=0.0, threshold=1.0, passed=False,
+                notes=(
+                    f"target {target!r} is FORBIDDEN per ADR-0008; "
+                    "the optimizer must not tune it. Remove the file "
+                    "from agent/prompts/ and use the propose-then-"
+                    "approve queue if a change is intended."
+                ),
             ))
             continue
 
