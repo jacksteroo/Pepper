@@ -55,6 +55,9 @@ async def init_db(config=None) -> None:
         # `Base.metadata.create_all` runs — the model registers itself
         # with `Base.metadata` only at import time.
         import agent.traces.models  # noqa: F401  (side-effect import)
+        # Epic 06 (#53) — strategies table. Side-effect import for ORM
+        # registration on Base.metadata.
+        import agent.strategies.repository  # noqa: F401  (side-effect import)
 
         # 2. Create all tables defined via Base
         await conn.run_sync(Base.metadata.create_all)
@@ -187,6 +190,12 @@ async def init_db(config=None) -> None:
         from agent.traces.migration import apply_traces_migration
 
         await apply_traces_migration(conn)
+
+        # Epic 06 (#53) — strategies table: HNSW + GIN indexes that
+        # `create_all` cannot express.
+        from agent.strategies.migration import apply_strategies_migration
+
+        await apply_strategies_migration(conn)
 
 
 def get_engine():
