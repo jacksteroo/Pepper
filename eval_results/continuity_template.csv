@@ -1,0 +1,4 @@
+trace_id,window_label,coherent_voice,reflection_grounded_continuity,strategy_invocation,identity_invocation,restraint_exhibited,recovery_from_error,notes
+# Score each sampled trace 0–3 per dimension. Save as continuity_<date>.csv next to this template.
+# `window_label` is "baseline" or "end_of_epic". The scoring tool aggregates per label.
+# Empty cells are treated as "not scored" — leave blank rather than guessing.
