@@ -72,6 +72,14 @@ class Turn:
     # None the assembler uses datetime.now(tz) at assemble time.
     now_override: Any | None = None
 
+    # Stable IDs of grounding rules injected via ``extra_system_suffix`` (#100).
+    # When the heavy path calls ``render_grounding_rules()`` and sets
+    # ``extra_system_suffix``, it should also pass these IDs so the assembler
+    # can record them in trace provenance for the optimizer (#46).
+    # Empty list means no grounding rules were injected (light path or tests
+    # that use a synthetic suffix string).
+    grounding_rule_ids: list[str] = field(default_factory=list)
+
 
 @dataclass
 class SelectorRecord:
@@ -100,6 +108,10 @@ class AssembledContext:
     system_prompt: str
     history: list[dict[str, Any]] = field(default_factory=list)
     selectors: dict[str, SelectorRecord] = field(default_factory=dict)
+    # Stable IDs of grounding rules injected for this turn (#100). Empty list
+    # on the light path or when grounding rules were not injected. Recorded in
+    # provenance so the optimizer (#46) can correlate rule sets to turn quality.
+    grounding_rule_ids: list[str] = field(default_factory=list)
 
     @property
     def provenance(self) -> dict[str, Any]:
@@ -154,6 +166,11 @@ class AssembledContext:
             "capability_block_version": str(
                 _get("capability_block", "capability_block_version", "") or ""
             ),
+            # Stable grounding rule IDs injected for this turn (#100).
+            # Empty list on the light path; populated by the heavy path via
+            # Turn.grounding_rule_ids. The optimizer (#46) reads this field to
+            # identify which rule versions were active when evaluating turn quality.
+            "grounding_rule_ids": list(self.grounding_rule_ids),
             "selectors": selectors_view,
         }
 

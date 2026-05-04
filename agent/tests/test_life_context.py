@@ -1,5 +1,5 @@
 import pytest
-from agent.life_context import build_system_prompt, get_life_context_sections, get_owner_name, load_life_context, load_soul
+from agent.life_context import build_schedule_block, build_system_prompt, get_life_context_sections, get_owner_name, load_life_context, load_soul
 
 
 def test_load_life_context_returns_string():
@@ -82,6 +82,56 @@ def test_build_system_prompt_soul_precedes_life_context():
 def test_build_system_prompt_contains_capability_block():
     prompt = build_system_prompt("data/life_context.md")
     assert "get_upcoming_events" in prompt or "Calendar" in prompt
+
+
+# --- Schedule registry tests (#98) ---
+
+class _StubConfig:
+    MORNING_BRIEF_HOUR = 7
+    MORNING_BRIEF_MINUTE = 30
+    WEEKLY_REVIEW_DAY = 6  # Sunday
+    WEEKLY_REVIEW_HOUR = 18
+    TIMEZONE = "US/Eastern"
+    OWNER_NAME = "Test Owner"
+
+
+def test_build_schedule_block_returns_empty_without_config():
+    assert build_schedule_block(None) == ""
+    assert build_schedule_block() == ""
+
+
+def test_build_schedule_block_contains_all_registry_ids():
+    """Every job in get_job_registry() must appear in the rendered schedule block."""
+    from agent.scheduler import get_job_registry
+    cfg = _StubConfig()
+    block = build_schedule_block(cfg)
+    registry = get_job_registry(cfg)
+    assert len(registry) > 0, "job registry must not be empty"
+    for job in registry:
+        assert job.name in block, (
+            f"Job '{job.id}' (name='{job.name}') from registry not found in schedule block"
+        )
+
+
+def test_build_schedule_block_reflects_config_values():
+    """Config-driven cron specs (morning brief, weekly review) must appear."""
+    cfg = _StubConfig()
+    block = build_schedule_block(cfg)
+    assert "07:30" in block, "morning brief hour:minute from config not rendered"
+    assert "Sunday" in block, "weekly review day from config not rendered"
+    assert "18:00" in block, "weekly review hour from config not rendered"
+
+
+def test_schedule_block_injected_into_system_prompt():
+    """When config is supplied, the system prompt must contain schedule entries."""
+    from agent.scheduler import get_job_registry
+    cfg = _StubConfig()
+    prompt = build_system_prompt("data/life_context.md", config=cfg)
+    registry = get_job_registry(cfg)
+    for job in registry:
+        assert job.name in prompt, (
+            f"Job '{job.id}' missing from system prompt — registry/prompt drift detected"
+        )
 
 
 def test_build_system_prompt_soul_chars_logged(caplog):

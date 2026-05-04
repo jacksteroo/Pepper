@@ -75,12 +75,14 @@ def test_assemble_returns_messages_and_provenance(tmp_path: Path) -> None:
 
     prov = asm_ctx.provenance
     # #33: top-level provenance carries the five required keys.
+    # #100: grounding_rule_ids is now a sixth required key.
     for required in (
         "life_context_sections_used",
         "last_n_turns",
         "memory_ids",
         "skill_match",
         "capability_block_version",
+        "grounding_rule_ids",
     ):
         assert required in prov, f"missing top-level provenance key {required}"
     # Per-selector detail still lives under ``selectors``.
@@ -215,6 +217,51 @@ def test_skills_index_appended_after_grounding_rules(tmp_path: Path) -> None:
     g_idx = rendered.index("GROUNDING_BLOCK")
     s_idx = rendered.index("alpha")
     assert g_idx < s_idx, "skills index must come after grounding rules"
+
+
+def test_grounding_rule_ids_recorded_in_provenance(tmp_path: Path) -> None:
+    """#100: grounding_rule_ids passed via Turn must appear in assembled provenance."""
+    from agent.context.grounding_rules import get_grounding_rule_ids
+
+    cfg = _StubConfig()
+    cfg.LIFE_CONTEXT_PATH = _life_context_path(tmp_path)
+    asm = ContextAssembler(
+        life_context_path=cfg.LIFE_CONTEXT_PATH,
+        config=cfg,
+        capability_registry=None,
+        memory_manager=_StubMemory([]),
+        skills_provider=lambda: [],
+        timezone="UTC",
+    )
+    fixed_now = datetime(2026, 5, 2, 12, 0, tzinfo=ZoneInfo("UTC"))
+    all_ids = get_grounding_rule_ids()
+
+    ctx = asm.assemble(
+        Turn(
+            user_message="hello",
+            grounding_rule_ids=all_ids,
+            now_override=fixed_now,
+        )
+    )
+    prov = ctx.provenance
+    assert prov["grounding_rule_ids"] == all_ids
+
+
+def test_grounding_rule_ids_empty_on_light_path(tmp_path: Path) -> None:
+    """#100: grounding_rule_ids defaults to [] when not supplied (light path)."""
+    cfg = _StubConfig()
+    cfg.LIFE_CONTEXT_PATH = _life_context_path(tmp_path)
+    asm = ContextAssembler(
+        life_context_path=cfg.LIFE_CONTEXT_PATH,
+        config=cfg,
+        capability_registry=None,
+        memory_manager=_StubMemory([]),
+        skills_provider=lambda: [],
+        timezone="UTC",
+    )
+    fixed_now = datetime(2026, 5, 2, 12, 0, tzinfo=ZoneInfo("UTC"))
+    ctx = asm.assemble(Turn(user_message="hi", now_override=fixed_now))
+    assert ctx.provenance["grounding_rule_ids"] == []
 
 
 def test_refresh_life_context_drops_cache(tmp_path: Path) -> None:

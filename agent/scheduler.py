@@ -12,6 +12,7 @@ reflector LISTENs on that channel.
 """
 
 import structlog
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -33,6 +34,113 @@ REFLECTOR_WEEKLY_CHANNEL = "reflector_weekly_trigger"
 REFLECTOR_MONTHLY_CHANNEL = "reflector_monthly_trigger"
 
 logger = structlog.get_logger()
+
+
+@dataclass(frozen=True)
+class ScheduledJob:
+    """Descriptor for a registered scheduler job.
+
+    Used by ``build_schedule_block`` in ``agent/life_context.py`` to render
+    the schedule section of the system prompt from the live registry rather
+    than a hand-rolled f-string. Adding or removing a job here automatically
+    updates the prompt without hand-edits.
+    """
+
+    id: str
+    name: str
+    cron_spec: str
+    description: str
+
+
+def get_job_registry(config=None) -> list[ScheduledJob]:
+    """Return the canonical list of registered scheduler jobs.
+
+    When *config* is supplied, human-readable cron specs for configurable
+    jobs (morning brief, weekly review) reflect the live config values so
+    the returned list is always the ground truth for what the scheduler will
+    actually run.
+
+    This is the single source of truth consumed by:
+    - ``PepperScheduler.start()`` (schedules the actual APScheduler jobs)
+    - ``build_schedule_block()`` in ``agent/life_context.py`` (system-prompt
+      schedule block)
+    - Tests that guard drift between the registry and the prompt text
+    """
+    if config is not None:
+        brief_hour = config.MORNING_BRIEF_HOUR
+        brief_minute = config.MORNING_BRIEF_MINUTE
+        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        weekly_day_idx = config.WEEKLY_REVIEW_DAY
+        weekly_day = days[weekly_day_idx] if 0 <= weekly_day_idx <= 6 else str(weekly_day_idx)
+        weekly_hour = config.WEEKLY_REVIEW_HOUR
+    else:
+        brief_hour = 8
+        brief_minute = 0
+        weekly_day = "Sunday"
+        weekly_hour = 18
+
+    return [
+        ScheduledJob(
+            id="morning_brief",
+            name="Morning brief",
+            cron_spec=f"daily at {brief_hour:02d}:{brief_minute:02d}",
+            description="pushed to owner via Telegram",
+        ),
+        ScheduledJob(
+            id="commitment_check",
+            name="Commitment check",
+            cron_spec="daily at 12:00",
+            description="scans recent memory for open commitments",
+        ),
+        ScheduledJob(
+            id="weekly_review",
+            name="Weekly review",
+            cron_spec=f"{weekly_day}s at {weekly_hour:02d}:00",
+            description="weekly summary pushed via Telegram",
+        ),
+        ScheduledJob(
+            id="memory_compression",
+            name="Memory compression",
+            cron_spec="Saturdays at 02:00",
+            description="compresses old recall memory to archival",
+        ),
+        ScheduledJob(
+            id="capability_refresh",
+            name="Capability refresh",
+            cron_spec="every 15 minutes",
+            description="re-probes data sources; registry reflects current state",
+        ),
+        ScheduledJob(
+            id="commitment_followup",
+            name="Commitment follow-up",
+            cron_spec="daily at 08:05, 17:05, 22:05",
+            description="surfaces unresolved commitments at due time",
+        ),
+        ScheduledJob(
+            id="reflector_trigger",
+            name="Reflector trigger",
+            cron_spec="daily at 23:55",
+            description="fires end-of-day Postgres NOTIFY for the reflector",
+        ),
+        ScheduledJob(
+            id="reflector_weekly_trigger",
+            name="Reflector weekly trigger",
+            cron_spec="Mondays at 00:15",
+            description="fires weekly rollup NOTIFY for the reflector",
+        ),
+        ScheduledJob(
+            id="reflector_monthly_trigger",
+            name="Reflector monthly trigger",
+            cron_spec="1st of month at 00:15",
+            description="fires monthly rollup NOTIFY for the reflector",
+        ),
+        ScheduledJob(
+            id="trace_compression",
+            name="Trace compression",
+            cron_spec="daily at 02:15",
+            description="promotes working→recall (>24h) and recall→archival (>28d)",
+        ),
+    ]
 
 
 class PepperScheduler:
