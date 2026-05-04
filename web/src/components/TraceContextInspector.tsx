@@ -212,6 +212,7 @@ interface ProvenanceShape {
   memory_ids?: Array<[string, number]>
   skill_match?: Record<string, unknown> | null
   capability_block_version?: string
+  strategy_ids?: string[]
   selectors?: Record<string, Record<string, unknown>>
 }
 
@@ -678,6 +679,13 @@ export default function TraceContextInspector({ traceId, detail: detailProp, onB
         </div>
       </div>
 
+      {/* ── Strategies ────────────────────────────────────────────── */}
+      <StrategiesSection
+        strategyIds={prov.strategy_ids ?? []}
+        strategiesProvenance={prov.selectors?.strategies ?? null}
+        reason={reasons.strategies}
+      />
+
       {/* ── Capability block ──────────────────────────────────────── */}
       <CapabilityBlockSection
         version={prov.capability_block_version ?? ''}
@@ -782,6 +790,77 @@ function RerenderResult({ rerender }: RerenderResultProps) {
         caption="original provenance → re-rendered provenance"
       />
     </>
+  )
+}
+
+interface StrategiesSectionProps {
+  strategyIds: string[]
+  strategiesProvenance: Record<string, unknown> | null
+  reason?: string
+}
+
+function StrategiesSection({
+  strategyIds,
+  strategiesProvenance,
+  reason,
+}: StrategiesSectionProps) {
+  // The raw strategy text is stored in the selector's content field inside
+  // provenance. We surface both the IDs (always available) and the rendered
+  // content (available on newer traces that store it in provenance).
+  const content =
+    (strategiesProvenance?.content as string | undefined) ?? null
+  const nonOptimizable =
+    (strategiesProvenance?.non_optimizable as boolean | undefined) ?? true
+
+  return (
+    <div style={styles.section}>
+      <div style={styles.sectionHeader}>
+        <span>Strategies</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {nonOptimizable && (
+            <span
+              style={{
+                ...styles.pill('#f97316'),
+                fontSize: 10,
+                letterSpacing: 0.3,
+              }}
+            >
+              non-optimizable
+            </span>
+          )}
+          <span style={styles.pill('#a78bfa')}>
+            {strategyIds.length} active
+          </span>
+        </div>
+      </div>
+      <div style={styles.sectionBody}>
+        {reason && <div style={styles.reason}>{reason}</div>}
+        {strategyIds.length === 0 ? (
+          <div style={styles.empty}>no strategies injected for this turn</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 11, color: '#888', marginBottom: 6 }}>
+              Strategy IDs surfaced in this turn&apos;s prompt:
+            </div>
+            <ul style={styles.list}>
+              {strategyIds.map((id) => (
+                <li key={id}>
+                  <code style={{ fontSize: 12 }}>{id}</code>
+                </li>
+              ))}
+            </ul>
+            {content && (
+              <>
+                <div style={{ fontSize: 11, color: '#888', marginTop: 10 }}>
+                  rendered strategy block:
+                </div>
+                <pre style={{ ...styles.pre, marginTop: 4 }}>{content}</pre>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 

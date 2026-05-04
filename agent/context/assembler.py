@@ -35,6 +35,10 @@ from agent.context.selectors import (
 )
 from agent.context.types import AssembledContext, SelectorRecord, Turn
 
+# StrategySelector is imported locally to keep the assembler importable
+# in environments where the strategies module is not yet migrated.
+# The selector is constructed lazily on first use.
+
 
 class ContextAssembler:
     """Compose the per-turn LLM context from injected selectors."""
@@ -151,6 +155,26 @@ class ContextAssembler:
         records[sk_record.name] = sk_record
         if sk_record.content:
             system = system + "\n\n" + sk_record.content
+
+        # 6b. Strategy block — pre-fetched async by caller via
+        # ``StrategySelector.select()`` and threaded in as
+        # ``turn.strategy_context`` + ``turn.strategy_ids``.
+        # NOT optimizable: the selector carries ``non_optimizable=True``.
+        strat_record = SelectorRecord(
+            name="strategies",
+            content=turn.strategy_context,
+            provenance={
+                "selector": "strategies",
+                "present": bool(turn.strategy_context),
+                "strategy_ids": list(turn.strategy_ids),
+                "n_strategies": len(turn.strategy_ids),
+                "chars": len(turn.strategy_context),
+                "non_optimizable": True,
+            },
+        )
+        records[strat_record.name] = strat_record
+        if strat_record.content:
+            system = system + "\n\n" + strat_record.content
 
         # 7. History.
         ln_record = self._last_n_turns.select(

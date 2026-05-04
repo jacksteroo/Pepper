@@ -11,6 +11,7 @@ from agent.context.selectors.last_n_turns import LastNTurnsSelector
 from agent.context.selectors.life_context import LifeContextSelector
 from agent.context.selectors.retrieved_memory import RetrievedMemorySelector
 from agent.context.selectors.skill_match import SkillMatchSelector
+from agent.context.selectors.strategies import StrategySelector
 
 __all__ = [
     "CapabilityBlockSelector",
@@ -18,4 +19,5 @@ __all__ = [
     "LifeContextSelector",
     "RetrievedMemorySelector",
     "SkillMatchSelector",
+    "StrategySelector",
 ]

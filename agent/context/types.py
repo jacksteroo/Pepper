@@ -59,6 +59,13 @@ class Turn:
     # ANSWER_FROM_CONTEXT turns strip this — see core for the rationale.
     include_skills_index: bool = True
 
+    # Pre-fetched strategy block (assembled async by StrategySelector before
+    # the synchronous assemble() call). Empty string → skip injection.
+    strategy_context: str = ""
+    # Structured strategy provenance: list of strategy_ids surfaced.
+    # Used by AssembledContext.provenance to record which strategies were used.
+    strategy_ids: list[str] = field(default_factory=list)
+
     # Optional caller-provided string appended *after* proactive contexts but
     # *before* the skills index. The heavy path uses this for the GROUNDING
     # RULES block — that block is per-turn behavioural intercept logic which
@@ -144,6 +151,10 @@ class AssembledContext:
 
         skill_match = _get("skill_match", "skill_match", None)
 
+        # Strategy IDs: list of strategy uuids injected this turn.
+        strategies_prov = _get("strategies", "strategy_ids", []) or []
+        strategy_ids: list[str] = [str(s) for s in strategies_prov if s]
+
         return {
             "life_context_sections_used": list(
                 _get("life_context", "life_context_sections_used", [])
@@ -154,6 +165,7 @@ class AssembledContext:
             "capability_block_version": str(
                 _get("capability_block", "capability_block_version", "") or ""
             ),
+            "strategy_ids": strategy_ids,
             "selectors": selectors_view,
         }
 

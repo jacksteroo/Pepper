@@ -30,6 +30,22 @@ AdapterFactory = Callable[[], OptimizerAdapter]
 
 ADAPTERS: dict[str, AdapterFactory] = {}
 
+# ── Non-optimizable selectors ────────────────────────────────────────────────
+# The selectors listed here carry owner-authored ground truth that the
+# optimizer must never rewrite. Any adapter or optimizer runner that
+# iterates over ``assembled_context.selectors`` must skip these names.
+#
+# ``strategies`` — behavioral guidelines set by the owner via
+#   propose_strategy_update / approve flow (Epic 06, ADR-0008 pattern).
+#   Strategy text is immutable from the optimizer's perspective.
+#
+# ``life_context`` — the owner's life context document. Included here
+#   as documentation; life context was never an optimizer target.
+NON_OPTIMIZABLE_SELECTORS: frozenset[str] = frozenset({
+    "strategies",
+    "life_context",
+})
+
 
 def register_adapter(target: str, factory: AdapterFactory) -> None:
     """Register or replace an adapter factory for ``target``.

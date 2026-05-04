@@ -101,6 +101,11 @@ from agent.local_filesystem_tools import (
     extract_path_from_text,
     inspect_local_path_sync,
 )
+from agent.strategies_tools import (
+    STRATEGY_TOOLS,
+    execute_query_strategies,
+    execute_propose_strategy_update,
+)
 
 logger = structlog.get_logger()
 
@@ -444,6 +449,15 @@ class PepperCore:
             lambda name, args: self._execute_tool(
                 name, args, session_id="pending_actions", skip_mcp_write_gate=True
             )
+        )
+
+        # Epic 06 (#54): StrategySelector — async; called in _chat_impl
+        # before assemble() and threaded in via Turn.strategy_context.
+        from agent.context.selectors.strategies import StrategySelector
+
+        self._strategy_selector = StrategySelector(
+            db_factory=self.db_factory,
+            llm_client=self.llm,
         )
 
     @property
@@ -3089,6 +3103,15 @@ class PepperCore:
         # prior turns from overriding it.
         _history_limit = 6 if routing.action_mode == ActionMode.ANSWER_FROM_CONTEXT else 20
 
+        # Epic 06 (#54): pre-fetch strategy block async before assembler.
+        # StrategySelector.select() is async; assembler.assemble() is sync.
+        # We do the async work here and thread the result in via Turn fields.
+        _strategy_record = await self._strategy_selector.select(user_message)
+        _strategy_context = _strategy_record.content or ""
+        _strategy_ids: list[str] = list(
+            _strategy_record.provenance.get("strategy_ids") or []
+        )
+
         _assembled = self.assembler.assemble(
             _AssemblerTurn(
                 user_message=user_message,
@@ -3109,6 +3132,8 @@ class PepperCore:
                 slack_context=slack_context,
                 include_skills_index=_include_skills_index,
                 extra_system_suffix=grounding_rules_suffix,
+                strategy_context=_strategy_context,
+                strategy_ids=_strategy_ids,
             )
         )
         # Persist the assembler's per-selector provenance to the active
@@ -4104,6 +4129,7 @@ class PepperCore:
                 + IMAGE_TOOLS
                 + SKILL_TOOLS
                 + SEND_TOOLS
+                + STRATEGY_TOOLS
                 + _PENDING_ACTION_TOOLS
             )
         # Phase 5: append MCP tools discovered from external servers
@@ -4659,6 +4685,11 @@ class PepperCore:
                     name, args, pending_actions=self.pending_actions
                 )
 
+            elif name == "apply_strategy_update":
+                # Reachable only via PendingActionsQueue.approve — not in the
+                # LLM-visible tool registry. Writes the approved strategy to DB.
+                result = await self._apply_strategy_update(args)
+
             elif name == "send_email":
                 # Reachable only via PendingActionsQueue.approve (skip_mcp_write_gate=True)
                 # because send_email is not in the LLM-visible tool registry.
@@ -4760,6 +4791,19 @@ class PepperCore:
                         except Exception as e:
                             logger.warning("search_images_failed", query=query, error=str(e))
                             result = {"error": f"Image search failed: {e}"}
+
+            elif name == "query_strategies":
+                result = await execute_query_strategies(
+                    args,
+                    db_factory=self.db_factory,
+                    llm_client=self.llm,
+                )
+
+            elif name == "propose_strategy_update":
+                result = await execute_propose_strategy_update(
+                    args,
+                    pending_actions=self.pending_actions,
+                )
 
             elif name == "inspect_local_path":
                 result = await execute_inspect_local_path(args)
@@ -4879,6 +4923,88 @@ class PepperCore:
             except Exception:
                 pass
             raise
+
+    async def _apply_strategy_update(self, args: dict) -> dict:
+        """Write an approved strategy update to the DB.
+
+        Called only via ``PendingActionsQueue.approve`` — never
+        directly from the LLM-facing tool dispatch.  Creates a new
+        row for ``new_text``; if ``strategy_id`` is present, marks
+        the old row as superseded.
+        """
+        import uuid as _uuid
+
+        new_text = (args.get("new_text") or "").strip()
+        reason = (args.get("reason") or "").strip()
+        old_id_str = (args.get("strategy_id") or "").strip() or None
+
+        if not new_text:
+            return {"error": "apply_strategy_update requires 'new_text'"}
+
+        if not self.db_factory:
+            return {"error": "database not available"}
+
+        try:
+            async with self.db_factory() as session:
+                from agent.strategies.models import StrategyRow
+                from agent.strategies.repository import StrategyRepository
+
+                repo = StrategyRepository(session)
+
+                # Determine version number.
+                version = 1
+                parent_id = None
+                if old_id_str:
+                    try:
+                        parent_id = _uuid.UUID(old_id_str)
+                        old_row = await session.get(StrategyRow, parent_id)
+                        if old_row is not None:
+                            version = (old_row.version or 0) + 1
+                    except ValueError:
+                        pass
+
+                # Embed new strategy text.
+                embedding = None
+                try:
+                    embedding = await self.llm.embed(new_text)
+                except Exception as exc:
+                    logger.warning("strategy_embed_failed", error=str(exc))
+
+                new_row = StrategyRow(
+                    strategy_id=_uuid.uuid4(),
+                    text=new_text,
+                    version=version,
+                    parent_strategy_id=parent_id,
+                    created_by="jack",
+                    confidence=0.7,
+                    status="active",
+                    embedding=embedding,
+                )
+                await repo.append(new_row)
+
+                if parent_id is not None:
+                    try:
+                        await repo.supersede(parent_id, new_row.strategy_id)
+                    except LookupError:
+                        pass
+
+                await session.commit()
+
+            logger.info(
+                "apply_strategy_update_committed",
+                new_id=str(new_row.strategy_id),
+                old_id=old_id_str,
+                reason_preview=reason[:80],
+            )
+            return {
+                "ok": True,
+                "strategy_id": str(new_row.strategy_id),
+                "message": "Strategy updated successfully.",
+            }
+
+        except Exception as exc:
+            logger.error("apply_strategy_update_failed", error=str(exc))
+            return {"error": str(exc)}
 
     async def _reload_session_history(self, session_id: str) -> None:
         """Reload the last 20 turns for this session from DB into working memory.

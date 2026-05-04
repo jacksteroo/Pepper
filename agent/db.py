@@ -188,6 +188,16 @@ async def init_db(config=None) -> None:
 
         await apply_traces_migration(conn)
 
+        # Epic 06 (#53) — strategies table: register model, create
+        # table, then apply HNSW + GIN indexes.
+        import agent.strategies.models  # noqa: F401  (side-effect import)
+
+        await conn.run_sync(Base.metadata.create_all)
+
+        from agent.strategies.migration import apply_strategies_migration
+
+        await apply_strategies_migration(conn)
+
 
 def get_engine():
     """Return the initialised SQLAlchemy async engine.
