@@ -63,7 +63,18 @@ const styles = {
     marginTop: '10px',
     fontSize: '11px',
     color: '#888',
+    alignItems: 'center' as const,
   },
+  thumbButton: (active: boolean, accent: string) => ({
+    padding: '3px 10px',
+    background: active ? accent + '33' : 'transparent',
+    color: active ? accent : '#9ca3af',
+    border: `1px solid ${active ? accent : '#2a2a2a'}`,
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontFamily: 'inherit',
+  }),
   traceLink: {
     fontSize: '11px',
     fontFamily: 'monospace',
@@ -98,6 +109,24 @@ interface Props {
 export default function Waits({ onOpenTrace }: Props) {
   const [waits, setWaits] = useState<WaitEntry[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [pendingThumb, setPendingThumb] = useState<string | null>(null)
+
+  async function handleThumb(traceId: string, value: 'up' | 'down') {
+    setPendingThumb(traceId)
+    try {
+      await api.thumbWait(traceId, value)
+      setWaits((prev) =>
+        prev
+          ? prev.map((w) => (w.trace_id === traceId ? { ...w, thumb: value } : w))
+          : prev,
+      )
+      logInfo('waits', 'thumb_recorded', { traceId, value })
+    } catch (err) {
+      logError('waits', 'thumb_failed', { traceId, error: String(err) })
+    } finally {
+      setPendingThumb(null)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -176,6 +205,22 @@ export default function Waits({ onOpenTrace }: Props) {
                 >
                   trace {w.trace_id.slice(0, 8)}
                 </span>
+                <button
+                  style={styles.thumbButton(w.thumb === 'up', '#22c55e')}
+                  disabled={pendingThumb === w.trace_id}
+                  onClick={() => handleThumb(w.trace_id, 'up')}
+                  title="Mark as a correct wait"
+                >
+                  ↑ correct
+                </button>
+                <button
+                  style={styles.thumbButton(w.thumb === 'down', '#ef4444')}
+                  disabled={pendingThumb === w.trace_id}
+                  onClick={() => handleThumb(w.trace_id, 'down')}
+                  title="Mark as an incorrect wait"
+                >
+                  ↓ incorrect
+                </button>
               </div>
             </div>
           ))
