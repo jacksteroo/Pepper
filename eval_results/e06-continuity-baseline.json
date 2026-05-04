@@ -1,0 +1,17 @@
+{
+  "epic": "E06",
+  "rubric_version": "1.0",
+  "scored_at": null,
+  "scorer": null,
+  "window_days": 7,
+  "dimensions": {
+    "coherent_voice": null,
+    "reflection_grounded_continuity": null,
+    "strategy_invocation": null,
+    "identity_invocation": null,
+    "restraint_exhibited": null,
+    "recovery_from_error": null
+  },
+  "total": null,
+  "notes": "Baseline to be scored before E06 artifacts land (pre-identity-doc, pre-strategy-hub, pre-wait-action)"
+}
