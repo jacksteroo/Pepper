@@ -157,6 +157,115 @@ async def update_life_context(
     await db_session.commit()
 
 
+def build_domain_rules_block(life_context_sections: dict[str, str]) -> str:
+    """Build a runtime-templated domain-rules supplement from parsed life context sections.
+
+    Replaces the stale hard-coded named entities and dates that previously lived
+    in ``docs/SOUL.md`` Domain Rules (removed in issue #99). Instead, we pull:
+
+    - Active open loops from the "Open Loops Taking Up Mental Space" or
+      "Active Challenges" sections
+    - Confirmed kid programs from the "Kids" or "Children" or family sections
+
+    This means closed loops automatically disappear from the prompt when
+    ``life_context.md`` is updated, and newly opened loops appear immediately.
+
+    The returned string is a plain-text block suitable for appending to the
+    system prompt after SOUL.md; it is prefixed with a section header so it
+    reads as a natural continuation of the Domain Rules section.
+
+    Returns an empty string when the relevant sections are absent (cold-start,
+    test paths with minimal life context, etc.).
+
+    TODO (#99): Rule 14 of the GROUNDING RULES (Susan's career) should collapse
+    into this block once it is stable — the rule currently lives in
+    ``agent/context/grounding_rules.py`` and references Susan by name. Once #99
+    is fully adopted, rule 14 can be reduced to a structural rule and the specific
+    career facts templated from the Partner section of life_context.md.
+    """
+    if not life_context_sections:
+        return ""
+
+    lines: list[str] = []
+
+    # ── Open loops / Active Challenges ──────────────────────────────────────
+    # Match any section whose heading contains these keywords (case-insensitive)
+    open_loop_keywords = ("open loop", "active challenge", "mental space")
+    open_loop_content: list[str] = []
+    for heading, body in life_context_sections.items():
+        if any(kw in heading.lower() for kw in open_loop_keywords):
+            for line in body.splitlines():
+                stripped = line.strip()
+                if stripped and stripped.startswith(("-", "*", "•")):
+                    open_loop_content.append(stripped.lstrip("-*• ").strip())
+
+    if open_loop_content:
+        lines.append(
+            "[Domain Rules — runtime context from current life context]"
+        )
+        lines.append("")
+        lines.append(
+            "Current open loops (from 'Open Loops' / 'Active Challenges' sections):"
+        )
+        for item in open_loop_content:
+            lines.append(f"- {item}")
+        lines.append("")
+
+    # ── Confirmed kid programs ───────────────────────────────────────────────
+    # Look for "confirmed" mentions in Kids / Children / Family sections
+    program_keywords = ("confirmed", "starts ", "start date", "harvard", "pre-college", "summer program")
+    kid_section_keywords = ("kid", "children", "child", "family", "matthew", "connor", "dylan")
+    confirmed_programs: list[str] = []
+    for heading, body in life_context_sections.items():
+        if any(kw in heading.lower() for kw in kid_section_keywords):
+            for line in body.splitlines():
+                stripped = line.strip()
+                if stripped and any(kw in stripped.lower() for kw in program_keywords):
+                    confirmed_programs.append(stripped.lstrip("-*• ").strip())
+
+    if confirmed_programs:
+        if not lines:
+            lines.append(
+                "[Domain Rules — runtime context from current life context]"
+            )
+            lines.append("")
+        lines.append(
+            "Confirmed kid programs and activities (for Pre-College Programs rule):"
+        )
+        for item in confirmed_programs:
+            lines.append(f"- {item}")
+        lines.append("")
+
+    if not lines:
+        return ""
+
+    return "\n".join(lines).rstrip()
+
+
+def build_schedule_block(config=None) -> str:
+    """Generate the schedule section of the system prompt from the live job registry.
+
+    Reads ``get_job_registry(config)`` from ``agent.scheduler`` so adding or
+    removing jobs in the registry automatically updates the system prompt —
+    the hardcoded f-string that previously lived here is gone.
+
+    Returns an empty string when *config* is None (cold-start / test paths
+    that don't supply a config).
+    """
+    if config is None:
+        return ""
+
+    from agent.scheduler import get_job_registry
+
+    jobs = get_job_registry(config)
+    lines = [
+        "Your automated schedule (runs inside your process — always on while the container is up):",
+    ]
+    for job in jobs:
+        lines.append(f"- {job.name}: {job.cron_spec} — {job.description}")
+    return "\n".join(lines)
+
+
 def build_capability_block(registry: "CapabilityRegistry | None" = None) -> str:
     """Generate the capability section of the system prompt from actual tool names.
 
@@ -266,19 +375,16 @@ def build_system_prompt(life_context_path: str = None, config=None,
         seeded=bool(context.strip()),
     )
 
-    if config is not None:
-        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        weekly_day = days[config.WEEKLY_REVIEW_DAY] if 0 <= config.WEEKLY_REVIEW_DAY <= 6 else str(config.WEEKLY_REVIEW_DAY)
-        schedule_block = f"""
-Your automated schedule (runs inside your process — always on while the container is up):
-- Morning brief: daily at {config.MORNING_BRIEF_HOUR:02d}:{config.MORNING_BRIEF_MINUTE:02d} — pushed to {owner_name.split()[0]} via Telegram
-- Commitment check: daily at 12:00 — scans recent memory for open commitments
-- Weekly review: {weekly_day}s at {config.WEEKLY_REVIEW_HOUR:02d}:00 — weekly summary pushed via Telegram
-- Memory compression: Saturdays at 02:00 — compresses old recall memory to archival"""
-    else:
-        schedule_block = ""
+    schedule_block = build_schedule_block(config)
 
     capability_block = build_capability_block(capability_registry)
+
+    # Build runtime-templated domain rules from the current life context (#99).
+    # This replaces hard-coded named entities and dates that previously lived in
+    # SOUL.md Domain Rules. Open loops disappear from the prompt when they are
+    # removed from life_context.md; confirmed programs surface automatically.
+    sections = get_life_context_sections(life_context_path or "data/life_context.md")
+    domain_rules_block = build_domain_rules_block(sections)
 
     return f"""{soul}
 {schedule_block}
@@ -294,4 +400,5 @@ Your owner's life context:
 {context}
 ---
 
-Answer questions about your owner directly from the life context above. Only call search_memory when looking for something from a previous conversation that isn't covered in the life context document."""
+Answer questions about your owner directly from the life context above. Only call search_memory when looking for something from a previous conversation that isn't covered in the life context document.
+{f"{chr(10)}{domain_rules_block}" if domain_rules_block else ""}"""

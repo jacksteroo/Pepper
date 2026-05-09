@@ -218,4 +218,9 @@ class ContextAssembler:
             system_prompt=system,
             history=history,
             selectors=records,
+            # #100: propagate grounding rule IDs from the turn so they appear
+            # in trace provenance. The heavy path in core.py calls
+            # get_grounding_rule_ids() and passes the list via Turn; the light
+            # path leaves it empty.
+            grounding_rule_ids=list(turn.grounding_rule_ids),
         )
